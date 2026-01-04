@@ -78,17 +78,36 @@ fn getSelectionRange(state: *const ActiveInputState, cursor_pos: usize, buffer_l
 }
 
 pub fn inputText(ctx: *GuiContext, buffer: []u8, buffer_len: *usize, opts: InputOptions) !bool {
+    const layout_mod = @import("../layout.zig");
+
+    // If there's a label, create a vertical layout to stack label and input
+    if (opts.label) |label| {
+        const label_metrics = try ctx.measureText(label, opts.label_font_size);
+        const label_width = @max(label_metrics.width, opts.width);
+        const label_spacing: f32 = 6; // Space between label and input
+        const total_height = opts.label_font_size + label_spacing + opts.height;
+        layout_mod.beginLayout(ctx, layout_mod.vLayout(ctx, .{ .margin = layout_mod.Spacing.all(0), .padding = layout_mod.Spacing.all(0), .width = label_width, .height = total_height }));
+    }
+
     const layout = ctx.getCurrentLayout();
 
     if (opts.label) |label| {
         const label_metrics = try ctx.measureText(label, opts.label_font_size);
-        const label_rect = layout.allocateSpace(ctx, label_metrics.width, opts.label_font_size);
+        const label_spacing: f32 = 6;
+        const label_rect = layout.allocateSpace(ctx, label_metrics.width, opts.label_font_size + label_spacing);
         try ctx.addText(label_rect.x, label_rect.y + 5, label, opts.label_font_size, opts.label_color);
     }
 
     const rect = layout.allocateSpace(ctx, opts.width, opts.height);
     const id = @intFromPtr(buffer.ptr);
-    return inputInternal(ctx, rect, id, buffer, buffer_len, opts, null);
+    const result = try inputInternal(ctx, rect, id, buffer, buffer_len, opts, null);
+
+    // End the vertical layout if we created one
+    if (opts.label != null) {
+        layout_mod.endLayout(ctx);
+    }
+
+    return result;
 }
 
 pub fn moveMousePosition(ctx: *GuiContext, state: *ActiveInputState, buffer: []u8, buffer_len: usize, rect: shapes.Rect, opts: InputOptions) !void {
@@ -622,12 +641,24 @@ fn inputNumberGeneric(
 }
 
 pub fn inputNumber(ctx: *GuiContext, value: anytype, opts: InputOptions) !bool {
+    const layout_mod = @import("../layout.zig");
+
+    // If there's a label, create a vertical layout to stack label and input
+    if (opts.label) |label| {
+        const label_metrics = try ctx.measureText(label, opts.label_font_size);
+        const label_width = @max(label_metrics.width, opts.width);
+        const label_spacing: f32 = 6; // Space between label and input
+        const total_height = opts.label_font_size + label_spacing + opts.height;
+        layout_mod.beginLayout(ctx, layout_mod.vLayout(ctx, .{ .margin = layout_mod.Spacing.all(0), .padding = layout_mod.Spacing.all(0), .width = label_width, .height = total_height }));
+    }
+
     const layout = ctx.getCurrentLayout();
 
     // Render label if provided
     if (opts.label) |label| {
         const label_metrics = try ctx.measureText(label, opts.label_font_size);
-        const label_rect = layout.allocateSpace(ctx, label_metrics.width, opts.label_font_size);
+        const label_spacing: f32 = 6;
+        const label_rect = layout.allocateSpace(ctx, label_metrics.width, opts.label_font_size + label_spacing);
         try ctx.addText(label_rect.x, label_rect.y + 5, label, opts.label_font_size, opts.label_color);
     }
 
@@ -641,9 +672,16 @@ pub fn inputNumber(ctx: *GuiContext, value: anytype, opts: InputOptions) !bool {
 
     const ChildType = type_info.pointer.child;
 
-    switch (@typeInfo(ChildType)) {
-        .float => return inputNumberGeneric(ctx, rect, value, ChildType, opts, isValidFloatChar),
-        .int => return inputNumberGeneric(ctx, rect, value, ChildType, opts, isValidIntChar),
+    const result = switch (@typeInfo(ChildType)) {
+        .float => try inputNumberGeneric(ctx, rect, value, ChildType, opts, isValidFloatChar),
+        .int => try inputNumberGeneric(ctx, rect, value, ChildType, opts, isValidIntChar),
         else => @compileError("value must be a pointer to a number type (int or float)"),
+    };
+
+    // End the vertical layout if we created one
+    if (opts.label != null) {
+        layout_mod.endLayout(ctx);
     }
+
+    return result;
 }

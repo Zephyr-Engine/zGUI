@@ -15,9 +15,33 @@ pub const Alignment = enum {
     BOTTOM,
 };
 
+pub const Spacing = struct {
+    top: f32,
+    right: f32,
+    bottom: f32,
+    left: f32,
+
+    pub fn all(value: f32) Spacing {
+        return .{ .top = value, .right = value, .bottom = value, .left = value };
+    }
+
+    pub fn symmetric(vertical: f32, horizontal: f32) Spacing {
+        return .{ .top = vertical, .right = horizontal, .bottom = vertical, .left = horizontal };
+    }
+
+    pub fn only(comptime args: anytype) Spacing {
+        var spacing = Spacing{ .top = 0, .right = 0, .bottom = 0, .left = 0 };
+        if (@hasField(@TypeOf(args), "top")) spacing.top = args.top;
+        if (@hasField(@TypeOf(args), "right")) spacing.right = args.right;
+        if (@hasField(@TypeOf(args), "bottom")) spacing.bottom = args.bottom;
+        if (@hasField(@TypeOf(args), "left")) spacing.left = args.left;
+        return spacing;
+    }
+};
+
 pub const LayoutOptions = struct {
-    margin: f32 = 0.0,
-    padding: f32 = 0.0,
+    margin: Spacing = Spacing.all(0.0),
+    padding: Spacing = Spacing.all(0.0),
     width: ?f32 = null, // Fixed width (null = auto)
     height: ?f32 = null, // Fixed height (null = auto)
     align_horizontal: ?Alignment = null, // Horizontal alignment (LEFT, CENTER, RIGHT)
@@ -30,8 +54,8 @@ pub const Layout = struct {
     y: f32,
     current_x: f32,
     current_y: f32,
-    margin: f32,
-    padding: f32,
+    margin: Spacing,
+    padding: Spacing,
     max_cross_size: f32, // max height for horizontal, max width for vertical
     width: ?f32, // Fixed width (null = auto)
     height: ?f32, // Fixed height (null = auto)
@@ -43,8 +67,8 @@ pub const Layout = struct {
             .direction = direction,
             .x = x,
             .y = y,
-            .current_x = x + opts.padding,
-            .current_y = y + opts.padding,
+            .current_x = x + opts.padding.left,
+            .current_y = y + opts.padding.top,
             .margin = opts.margin,
             .padding = opts.padding,
             .max_cross_size = 0.0,
@@ -57,15 +81,15 @@ pub const Layout = struct {
 
     pub fn allocateSpace(self: *Layout, ctx: *const GuiContext, width: f32, height: f32) shapes.Rect {
         switch (self.direction) {
-            .HORIZONTAL => self.current_x += self.margin,
-            .VERTICAL => self.current_y += self.margin,
+            .HORIZONTAL => self.current_x += self.margin.left,
+            .VERTICAL => self.current_y += self.margin.top,
         }
 
         var x = self.current_x;
         var y = self.current_y;
 
         if (self.align_vertical) |v_align| {
-            const available_height = (self.height orelse ctx.window_height) - (self.padding * 2);
+            const available_height = (self.height orelse ctx.window_height) - (self.padding.top + self.padding.bottom);
             switch (v_align) {
                 .TOP => {}, // Default, no adjustment
                 .CENTER => y += (available_height - height) * 0.5,
@@ -75,7 +99,7 @@ pub const Layout = struct {
         }
 
         if (self.align_horizontal) |h_align| {
-            const available_width = (self.width orelse ctx.window_height) - (self.padding * 2);
+            const available_width = (self.width orelse ctx.window_width) - (self.padding.left + self.padding.right);
             switch (h_align) {
                 .LEFT => {}, // Default, no adjustment
                 .CENTER => x += (available_width - width) * 0.5,
@@ -93,11 +117,11 @@ pub const Layout = struct {
 
         switch (self.direction) {
             .HORIZONTAL => {
-                self.current_x += width;
+                self.current_x += width + self.margin.right;
                 self.max_cross_size = @max(self.max_cross_size, height);
             },
             .VERTICAL => {
-                self.current_y += height;
+                self.current_y += height + self.margin.bottom;
                 self.max_cross_size = @max(self.max_cross_size, width);
             },
         }
@@ -119,12 +143,12 @@ pub const Layout = struct {
 
 pub fn getBounds(layout: *const Layout) shapes.Rect {
     const auto_width = switch (layout.direction) {
-        .HORIZONTAL => layout.current_x - layout.x + layout.padding,
-        .VERTICAL => layout.max_cross_size + layout.padding * 2,
+        .HORIZONTAL => layout.current_x - layout.x + layout.padding.right,
+        .VERTICAL => layout.max_cross_size + layout.padding.left + layout.padding.right,
     };
     const auto_height = switch (layout.direction) {
-        .HORIZONTAL => layout.max_cross_size + layout.padding * 2,
-        .VERTICAL => layout.current_y - layout.y + layout.padding,
+        .HORIZONTAL => layout.max_cross_size + layout.padding.top + layout.padding.bottom,
+        .VERTICAL => layout.current_y - layout.y + layout.padding.bottom,
     };
 
     return shapes.Rect{
@@ -172,12 +196,12 @@ pub fn endLayout(ctx: *GuiContext) void {
 
     if (ctx.current_panel_id) |panel_id| {
         const content_width = switch (finished_layout.direction) {
-            .HORIZONTAL => finished_layout.current_x - finished_layout.x + finished_layout.padding,
-            .VERTICAL => finished_layout.max_cross_size + finished_layout.padding * 2,
+            .HORIZONTAL => finished_layout.current_x - finished_layout.x + finished_layout.padding.right,
+            .VERTICAL => finished_layout.max_cross_size + finished_layout.padding.left + finished_layout.padding.right,
         };
         const content_height = switch (finished_layout.direction) {
-            .HORIZONTAL => finished_layout.max_cross_size + finished_layout.padding * 2,
-            .VERTICAL => finished_layout.current_y - finished_layout.y + finished_layout.padding,
+            .HORIZONTAL => finished_layout.max_cross_size + finished_layout.padding.top + finished_layout.padding.bottom,
+            .VERTICAL => finished_layout.current_y - finished_layout.y + finished_layout.padding.bottom,
         };
 
         if (ctx.panel_sizes.getPtr(panel_id)) |panel_size| {

@@ -25,9 +25,9 @@ pub fn collapsibleSection(
     const current_layout = ctx.getCurrentLayout();
 
     const available_width = if (current_layout.width) |w|
-        w - (current_layout.padding * 2)
+        w - (current_layout.padding.left + current_layout.padding.right)
     else
-        ctx.window_width - (current_layout.padding * 2);
+        ctx.window_width - (current_layout.padding.left + current_layout.padding.right);
 
     const header_rect = current_layout.allocateSpace(ctx, available_width, opts.header_height);
     const is_hovered = ctx.input.isMouseInRect(header_rect);
@@ -86,8 +86,8 @@ pub fn collapsibleSection(
 
     if (is_open.*) {
         const content_layout = layout.Layout.init(.VERTICAL, header_rect.x, header_rect.y + header_rect.h, .{
-            .margin = opts.margin,
-            .padding = opts.padding,
+            .margin = layout.Spacing.all(opts.margin),
+            .padding = layout.Spacing.all(opts.padding),
             .width = header_rect.w,
         });
         layout.beginLayout(ctx, content_layout);

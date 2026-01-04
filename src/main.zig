@@ -73,6 +73,10 @@ pub fn main() !void {
     var i32_value: i32 = -123;
     var i64_value: i64 = 9876543210;
 
+    var x_coord: f32 = 0.0;
+    var y_coord: f32 = 0.0;
+    var z_coord: f32 = 0.0;
+
     var fb_width: i32 = 0;
     var fb_height: i32 = 0;
     window.getFramebufferSize(&fb_width, &fb_height);
@@ -96,9 +100,9 @@ pub fn main() !void {
 
         const center_width = gui.window_width - left_panel_width - right_panel_width;
 
-        layout.beginLayout(&gui, layout.vLayout(&gui, .{ .margin = 0, .padding = 0, .height = gui.window_height }));
+        layout.beginLayout(&gui, layout.vLayout(&gui, .{ .margin = layout.Spacing.all(0), .padding = layout.Spacing.all(0), .height = gui.window_height }));
 
-        layout.beginLayout(&gui, layout.hLayout(&gui, .{ .margin = 10, .padding = 12, .height = top_panel_height }));
+        layout.beginLayout(&gui, layout.hLayout(&gui, .{ .margin = layout.Spacing.all(10), .padding = layout.Spacing.all(12), .height = top_panel_height }));
         _ = try panelWidget.topPanel(&gui, "top", .{ .resizable = false });
 
         if (try dropdown.dropdown(&gui, 1, "File", &file_options, .{ .font_size = 16, .padding = 6, .color = 0x546be7FF, .border_radius = 4.0, .font_color = 0xFFFFFFFF })) |index| {
@@ -112,15 +116,15 @@ pub fn main() !void {
         layout.endLayout(&gui);
 
         // Main content area - horizontal layout
-        layout.beginLayout(&gui, layout.hLayout(&gui, .{ .margin = 0, .padding = 0, .height = gui.window_height - top_panel_height }));
+        layout.beginLayout(&gui, layout.hLayout(&gui, .{ .margin = layout.Spacing.all(0), .padding = layout.Spacing.all(0), .height = gui.window_height - top_panel_height }));
 
         // Left sidebar - vertical layout with buttons and checkbox (left aligned)
-        layout.beginLayout(&gui, layout.vLayout(&gui, .{ .margin = 0, .padding = 16, .width = left_panel_width }));
+        layout.beginLayout(&gui, layout.vLayout(&gui, .{ .margin = layout.Spacing.all(0), .padding = layout.Spacing.all(16), .width = left_panel_width }));
         const left_panel = try panelWidget.leftPanel(&gui, "left", .{ .resizable = true });
         left_panel_width = left_panel.width;
 
         if (try collapsible.collapsibleSection(&gui, "Buttons", &left_section_open, .{})) {
-            if (btn.button(&gui, "hello world", .{ .font_size = 24, .color = 0xFFC864FF, .border_radius = 10.0 })) {
+            if (btn.button(&gui, "hello world", .{ .font_size = 24, .color = 0xFFC864FF })) {
                 std.debug.print("Button 'hello world' was clicked!\n", .{});
             }
             if (btn.button(&gui, "small text", .{ .font_size = 16, .font_color = 0xFFFFFFFF, .color = 0xC864FFFF, .border_radius = 8.0, .variant = btn.Variant.OUTLINED })) {
@@ -139,13 +143,13 @@ pub fn main() !void {
         // Center column - new vertical layout container
 
         layout.beginLayout(&gui, layout.vLayout(&gui, .{
-            .padding = 0,
+            .padding = layout.Spacing.all(0),
             .width = center_width,
         }));
 
         // Image widget - centered within vertical layout (leaves room for bottom panel)
         layout.beginLayout(&gui, layout.vLayout(&gui, .{
-            .padding = 0,
+            .padding = layout.Spacing.all(0),
             .width = center_width,
             .height = gui.window_height - bottom_panel_height,
             .align_horizontal = .CENTER,
@@ -158,8 +162,8 @@ pub fn main() !void {
 
         // Bottom panel - sibling to image container, follows sequentially
         layout.beginLayout(&gui, layout.hLayout(&gui, .{
-            .margin = 0,
-            .padding = 0,
+            .margin = layout.Spacing.all(0),
+            .padding = layout.Spacing.all(0),
             .height = bottom_panel_height,
             .width = center_width,
         }));
@@ -170,11 +174,23 @@ pub fn main() !void {
         layout.endLayout(&gui); // End center column vLayout
 
         // Right sidebar - vertical layout with input fields (bottom aligned)
-        layout.beginLayout(&gui, layout.vLayout(&gui, .{ .margin = 0, .padding = 16, .width = right_panel_width }));
+        layout.beginLayout(&gui, layout.vLayout(&gui, .{ .margin = layout.Spacing.all(0), .padding = layout.Spacing.all(16), .width = right_panel_width }));
         const right_panel = try panelWidget.rightPanel(&gui, "right", .{ .resizable = true });
         right_panel_width = right_panel.width;
 
         if (try collapsible.collapsibleSection(&gui, "Inputs", &right_section_open, .{})) {
+            layout.beginLayout(&gui, layout.hLayout(&gui, .{ .margin = layout.Spacing.only(.{ .right = 4 }), .padding = layout.Spacing.all(0), .height = 60 }));
+            if (try textInput.inputNumber(&gui, &x_coord, .{ .font_size = 18, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 90, .height = 35, .label = "x" })) {
+                std.debug.print("X changed: {d}\n", .{x_coord});
+            }
+            if (try textInput.inputNumber(&gui, &y_coord, .{ .font_size = 18, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 90, .height = 35, .label = "y" })) {
+                std.debug.print("Y changed: {d}\n", .{y_coord});
+            }
+            if (try textInput.inputNumber(&gui, &z_coord, .{ .font_size = 18, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 90, .height = 35, .label = "z" })) {
+                std.debug.print("Z changed: {d}\n", .{z_coord});
+            }
+            layout.endLayout(&gui);
+
             if (try textInput.inputText(&gui, &input_buffer, &input_len, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40, .label = "Text Input" })) {
                 std.debug.print("Text changed: {s}\n", .{input_buffer[0..input_len]});
             }

@@ -19,7 +19,8 @@ pub const Window = struct {
         glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MINOR, 3);
         glfw.glfwWindowHint(glfw.GLFW_OPENGL_PROFILE, glfw.GLFW_OPENGL_CORE_PROFILE);
-        glfw.glfwWindowHint(glfw.GLFW_SAMPLES, 4);
+        glfw.glfwWindowHint(glfw.GLFW_SAMPLES, 8); // 8x MSAA for extra smooth edges
+        glfw.glfwWindowHint(glfw.GLFW_DOUBLEBUFFER, glfw.GLFW_TRUE); // Double buffering
 
         const handle = glfw.glfwCreateWindow(width, height, title, null, null);
         if (handle == null) {
