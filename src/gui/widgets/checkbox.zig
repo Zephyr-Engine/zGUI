@@ -25,15 +25,18 @@ pub fn checkbox(ctx: *GuiContext, checked: *bool, opts: CheckboxOptions) !bool {
 
     try ctx.draw_list.addRoundedRectOutline(rect, opts.border_radius, opts.border_thickness, opts.color);
     if (checked.*) {
-        const padding = opts.size * 0.15;
-        const checkmark_size = opts.size - (padding * 2);
-        const checkmark_x = rect.x + padding;
-        const checkmark_y = rect.y + padding;
+        // Only render checkmark if image is available
+        if (ctx.checkmark_image) |*img| {
+            const padding = opts.size * 0.15;
+            const checkmark_size = opts.size - (padding * 2);
+            const checkmark_x = rect.x + padding;
+            const checkmark_y = rect.y + padding;
 
-        try imageWidget.imageAt(ctx, checkmark_x, checkmark_y, &ctx.checkmark_image, .{
-            .width = checkmark_size,
-            .height = checkmark_size,
-        });
+            try imageWidget.imageAt(ctx, checkmark_x, checkmark_y, img, .{
+                .width = checkmark_size,
+                .height = checkmark_size,
+            });
+        }
     }
 
     return is_clicked;

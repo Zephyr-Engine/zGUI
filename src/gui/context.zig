@@ -82,8 +82,10 @@ pub const GuiContext = struct {
     font_cache: FontCache,
     current_font_texture: TextureHandle,
     renderer: *Renderer,
-    window: Window,
-    checkmark_image: Image,
+    window: ?Window,
+
+    // Optional checkmark image for checkbox widget (can be set by user)
+    checkmark_image: ?Image,
 
     // Active input widget state (only exists when an input is focused)
     active_input_id: ?u64,
@@ -126,14 +128,13 @@ pub const GuiContext = struct {
     ibeam_cursor: ?*Cursor,
     current_cursor: ?*Cursor,
 
-    pub fn init(allocator: std.mem.Allocator, win: Window, renderer: *Renderer) !GuiContext {
-        const checkmark_image = try Image.load(allocator, renderer, "assets/checkmark.png");
-
-        const arrow_cursor = window.createStandardCursor(.arrow);
-        const hand_cursor = window.createStandardCursor(.hand);
-        const hresize_cursor = window.createStandardCursor(.hresize);
-        const vresize_cursor = window.createStandardCursor(.vresize);
-        const ibeam_cursor = window.createStandardCursor(.ibeam);
+    pub fn init(allocator: std.mem.Allocator, renderer: *Renderer, win: ?Window) !GuiContext {
+        // Only create cursors if we have a window
+        const arrow_cursor = if (win) |_| window.createStandardCursor(.arrow) else null;
+        const hand_cursor = if (win) |_| window.createStandardCursor(.hand) else null;
+        const hresize_cursor = if (win) |_| window.createStandardCursor(.hresize) else null;
+        const vresize_cursor = if (win) |_| window.createStandardCursor(.vresize) else null;
+        const ibeam_cursor = if (win) |_| window.createStandardCursor(.ibeam) else null;
 
         const ctx = GuiContext{
             .allocator = allocator,
@@ -142,8 +143,8 @@ pub const GuiContext = struct {
             .font_cache = FontCache.init(allocator, "assets/RobotoMono-Regular.ttf", renderer),
             .current_font_texture = 0,
             .renderer = renderer,
-            .checkmark_image = checkmark_image,
             .window = win,
+            .checkmark_image = null,
             .window_width = 0.0,
             .window_height = 0.0,
             .active_input_id = null,
@@ -195,11 +196,70 @@ pub const GuiContext = struct {
         self.setCursor(self.arrow_cursor);
     }
 
+    /// Update input from a window (for GLFW-based applications)
     pub fn updateInput(self: *GuiContext, win: Window) void {
         self.input.update(win);
 
         // Consume clicks if they're over an active dropdown overlay
         self.consumeOverlayClicks();
+    }
+
+    /// Direct input injection methods for game engines
+
+    /// Inject mouse movement
+    pub fn injectMouseMove(self: *GuiContext, x: f64, y: f64) void {
+        self.input.cursor_x = x;
+        self.input.cursor_y = y;
+    }
+
+    /// Inject mouse button state
+    pub fn injectMouseButton(self: *GuiContext, button: window.MouseButton, pressed: bool) void {
+        switch (button) {
+            .left => {
+                if (pressed and !self.input.mouse_left_pressed) {
+                    self.input.registerMouseClick();
+                }
+                self.input.mouse_left_pressed = pressed;
+            },
+            .right => {
+                if (pressed and !self.input.mouse_right_pressed) {
+                    self.input.registerRightClick();
+                }
+                self.input.mouse_right_pressed = pressed;
+            },
+            .middle => {
+                if (pressed and !self.input.mouse_middle_pressed) {
+                    self.input.registerMiddleClick();
+                }
+                self.input.mouse_middle_pressed = pressed;
+            },
+        }
+    }
+
+    /// Inject character input (for text entry)
+    pub fn injectChar(self: *GuiContext, codepoint: u32) void {
+        self.input.registerChar(codepoint);
+    }
+
+    /// Inject keyboard key
+    pub fn injectKey(self: *GuiContext, key: c_int, action: window.KeyAction) void {
+        self.input.registerKey(key, @intFromEnum(action));
+    }
+
+    /// Inject scroll wheel
+    pub fn injectScroll(self: *GuiContext, xoffset: f64, yoffset: f64) void {
+        self.input.registerScroll(xoffset, yoffset);
+    }
+
+    /// Inject modifier keys state
+    pub fn injectModifiers(self: *GuiContext, ctrl: bool, alt: bool, shift: bool, super: bool) void {
+        self.input.ctrl_pressed = ctrl;
+        self.input.alt_pressed = alt;
+        self.input.shift_pressed = shift;
+        self.input.super_pressed = super;
+
+        // Set primary modifier based on platform
+        self.input.primary_pressed = if (builtin.os.tag == .macos) super else ctrl;
     }
 
     fn consumeOverlayClicks(self: *GuiContext) void {
@@ -285,15 +345,22 @@ pub const GuiContext = struct {
     pub fn deinit(self: *GuiContext) void {
         self.draw_list.deinit();
         self.font_cache.deinit();
-        self.checkmark_image.deinit(self.renderer);
         self.layout_stack.deinit(self.allocator);
         self.panel_sizes.deinit();
 
-        window.destroyCursor(self.arrow_cursor);
-        window.destroyCursor(self.hand_cursor);
-        window.destroyCursor(self.hresize_cursor);
-        window.destroyCursor(self.vresize_cursor);
-        window.destroyCursor(self.ibeam_cursor);
+        // Clean up optional checkmark image
+        if (self.checkmark_image) |*img| {
+            img.deinit(self.renderer);
+        }
+
+        // Only destroy cursors if we have a window
+        if (self.window) |_| {
+            window.destroyCursor(self.arrow_cursor);
+            window.destroyCursor(self.hand_cursor);
+            window.destroyCursor(self.hresize_cursor);
+            window.destroyCursor(self.vresize_cursor);
+            window.destroyCursor(self.ibeam_cursor);
+        }
     }
 
     pub fn getCurrentLayout(self: *GuiContext) *Layout {
@@ -318,7 +385,9 @@ pub const GuiContext = struct {
 
     pub fn setCursor(self: *GuiContext, cursor: ?*Cursor) void {
         if (self.current_cursor != cursor) {
-            self.window.setCursor(cursor);
+            if (self.window) |win| {
+                win.setCursor(cursor);
+            }
             self.current_cursor = cursor;
         }
     }

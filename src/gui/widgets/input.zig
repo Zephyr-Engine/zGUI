@@ -326,9 +326,11 @@ fn inputInternal(
         }
 
         if (ctx.input.isKeyJustPressed(@intFromEnum(Key.v)) and ctx.input.primary_pressed) {
-            const content = ctx.window.getClipboardString();
-            const len = std.mem.len(content);
-            const slice = content[0..len];
+            // Only paste if we have a window with clipboard access
+            if (ctx.window) |win| {
+                const content = win.getClipboardString();
+                const len = std.mem.len(content);
+                const slice = content[0..len];
 
             if (hasSelection(&state, state.cursor_pos)) {
                 if (getSelectionRange(&state, state.cursor_pos, buffer_len.*)) |range| {
@@ -361,31 +363,38 @@ fn inputInternal(
                 text_changed = true;
                 state.cursor_blink_time = window.getTime();
             }
+            }
         }
 
         if (ctx.input.isKeyJustPressed(@intFromEnum(Key.c)) and ctx.input.primary_pressed and hasSelection(&state, state.cursor_pos)) {
             if (getSelectionRange(&state, state.cursor_pos, buffer_len.*)) |range| {
-                const content = buffer[range.start..range.end];
+                // Only copy if we have a window with clipboard access
+                if (ctx.window) |win| {
+                    const content = buffer[range.start..range.end];
 
-                var buf: [4096:0]u8 = undefined;
-                const copy_len = @min(content.len, buf.len - 1);
-                @memcpy(buf[0..copy_len], content[0..copy_len]);
-                buf[copy_len] = 0;
+                    var buf: [4096:0]u8 = undefined;
+                    const copy_len = @min(content.len, buf.len - 1);
+                    @memcpy(buf[0..copy_len], content[0..copy_len]);
+                    buf[copy_len] = 0;
 
-                ctx.window.setClipboardString(&buf);
+                    win.setClipboardString(&buf);
+                }
             }
         }
 
         if (ctx.input.isKeyJustPressed(@intFromEnum(Key.x)) and ctx.input.primary_pressed and hasSelection(&state, state.cursor_pos)) {
             if (getSelectionRange(&state, state.cursor_pos, buffer_len.*)) |range| {
-                const content = buffer[range.start..range.end];
+                // Only cut (copy to clipboard) if we have a window with clipboard access
+                if (ctx.window) |win| {
+                    const content = buffer[range.start..range.end];
 
-                var buf: [4096:0]u8 = undefined;
-                const copy_len = @min(content.len, buf.len - 1);
-                @memcpy(buf[0..copy_len], content[0..copy_len]);
-                buf[copy_len] = 0;
+                    var buf: [4096:0]u8 = undefined;
+                    const copy_len = @min(content.len, buf.len - 1);
+                    @memcpy(buf[0..copy_len], content[0..copy_len]);
+                    buf[copy_len] = 0;
 
-                ctx.window.setClipboardString(&buf);
+                    win.setClipboardString(&buf);
+                }
 
                 const bytes_to_remove = range.end - range.start;
                 std.mem.copyForwards(u8, buffer[range.start .. buffer_len.* - bytes_to_remove], buffer[range.end..buffer_len.*]);

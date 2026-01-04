@@ -34,12 +34,12 @@ pub fn main() !void {
     var renderer = try opengl.createRenderer(allocator, Window);
     defer renderer.deinit();
 
-    var gui = try GuiContext.init(allocator, window, &renderer);
+    var gui = try GuiContext.init(allocator, &renderer, window);
     defer gui.deinit();
 
-    // Load test image
-    var checkmark_img = try imageWidget.Image.load(allocator, &renderer, "assets/checkmark.png");
-    defer checkmark_img.deinit(&renderer);
+    // Load checkmark image for checkbox widget
+    const checkmark_img = try imageWidget.Image.load(allocator, &renderer, "assets/checkmark.png");
+    gui.checkmark_image = checkmark_img;
 
     window.setUserPointer(&gui);
     window.setMouseButtonCallback(input.mouseButtonCallback);
@@ -151,7 +151,9 @@ pub fn main() !void {
             .align_horizontal = .CENTER,
             .align_vertical = .CENTER,
         }));
-        try imageWidget.image(&gui, &checkmark_img, .{});
+        if (gui.checkmark_image) |*img| {
+            try imageWidget.image(&gui, img, .{});
+        }
         layout.endLayout(&gui);
 
         // Bottom panel - sibling to image container, follows sequentially
