@@ -5,18 +5,19 @@ const ActiveInputState = @import("../context.zig").ActiveInputState;
 const shapes = @import("../shapes.zig");
 const window = @import("../window.zig");
 const Key = window.Key;
+const theme_mod = @import("../theme.zig");
 
 pub const InputOptions = struct {
     font_size: f32 = 24,
-    color: shapes.Color = 0x000000FF,
-    text_color: shapes.Color = 0x000000FF,
+    color: ?shapes.Color = null,
+    text_color: ?shapes.Color = null,
     border_radius: f32 = 8.0,
     border_thickness: f32 = 2.0,
     width: f32 = 200.0,
     height: f32 = 40.0,
     label: ?[]const u8 = null,
     label_font_size: f32 = 16,
-    label_color: shapes.Color = 0xFFFFFFFF,
+    label_color: ?shapes.Color = null,
 };
 
 fn isWordBoundary(char: u8) bool {
@@ -95,7 +96,8 @@ pub fn inputText(ctx: *GuiContext, buffer: []u8, buffer_len: *usize, opts: Input
         const label_metrics = try ctx.measureText(label, opts.label_font_size);
         const label_spacing: f32 = 6;
         const label_rect = layout.allocateSpace(ctx, label_metrics.width, opts.label_font_size + label_spacing);
-        try ctx.addText(label_rect.x, label_rect.y + 5, label, opts.label_font_size, opts.label_color);
+        const label_color = theme_mod.getColor(ctx.theme, opts.label_color, "text_secondary", 0x9d9d9dFF);
+        try ctx.addText(label_rect.x, label_rect.y + 5, label, opts.label_font_size, label_color);
     }
 
     const rect = layout.allocateSpace(ctx, opts.width, opts.height);
@@ -187,18 +189,15 @@ fn inputInternal(
         try moveMousePosition(ctx, &state, buffer, buffer_len.*, rect, opts);
     }
 
-    var box_color = opts.color;
-    if (is_active) {
-        const r: u8 = @intCast((opts.color >> 24) & 0xFF);
-        const g: u8 = @intCast((opts.color >> 16) & 0xFF);
-        const b: u8 = @intCast((opts.color >> 8) & 0xFF);
-        const a: u8 = @intCast(opts.color & 0xFF);
-        const factor = 1.2;
-        const new_r: u8 = @min(255, @as(u8, @intFromFloat(@as(f32, @floatFromInt(r)) * factor)));
-        const new_g: u8 = @min(255, @as(u8, @intFromFloat(@as(f32, @floatFromInt(g)) * factor)));
-        const new_b: u8 = @min(255, @as(u8, @intFromFloat(@as(f32, @floatFromInt(b)) * factor)));
-        box_color = (@as(u32, new_r) << 24) | (@as(u32, new_g) << 16) | (@as(u32, new_b) << 8) | @as(u32, a);
-    }
+    // Get colors from theme with option overrides
+    const base_border_color = theme_mod.getColor(ctx.theme, opts.color, "border_subtle", 0x3e3e42FF);
+    const text_color = theme_mod.getColor(ctx.theme, opts.text_color, "text_primary", 0xccccccFF);
+
+    // Border color - stronger when active
+    const box_color = if (is_active)
+        theme_mod.getColor(ctx.theme, opts.color, "border_strong", 0x454545FF)
+    else
+        base_border_color;
 
     try ctx.draw_list.addRoundedRectOutline(rect, opts.border_radius, opts.border_thickness, box_color);
 
@@ -507,7 +506,7 @@ fn inputInternal(
                 const highlight_w = @min(sel_x_end, rect.x + rect.w - padding) - highlight_x;
 
                 if (highlight_w > 0) {
-                    const selection_color: u32 = 0x4A90E2AA;
+                    const selection_color = ctx.theme.input_selection;
                     const selection_rect = shapes.Rect{
                         .x = highlight_x,
                         .y = text_y,
@@ -522,7 +521,7 @@ fn inputInternal(
         if (visible_start < visible_end) {
             const visible_text = full_text[visible_start..visible_end];
             const render_x = text_x - (state.scroll_offset - current_x);
-            try ctx.addText(render_x, text_y, visible_text, opts.font_size, opts.text_color);
+            try ctx.addText(render_x, text_y, visible_text, opts.font_size, text_color);
         }
     }
 
@@ -547,7 +546,7 @@ fn inputInternal(
                 .w = 2.0,
                 .h = cursor_height,
             };
-            try ctx.draw_list.addRect(cursor_rect, opts.text_color);
+            try ctx.draw_list.addRect(cursor_rect, text_color);
         }
     }
 
@@ -659,7 +658,8 @@ pub fn inputNumber(ctx: *GuiContext, value: anytype, opts: InputOptions) !bool {
         const label_metrics = try ctx.measureText(label, opts.label_font_size);
         const label_spacing: f32 = 6;
         const label_rect = layout.allocateSpace(ctx, label_metrics.width, opts.label_font_size + label_spacing);
-        try ctx.addText(label_rect.x, label_rect.y + 5, label, opts.label_font_size, opts.label_color);
+        const label_color = theme_mod.getColor(ctx.theme, opts.label_color, "text_secondary", 0x9d9d9dFF);
+        try ctx.addText(label_rect.x, label_rect.y + 5, label, opts.label_font_size, label_color);
     }
 
     const rect = layout.allocateSpace(ctx, opts.width, opts.height);

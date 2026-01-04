@@ -2,29 +2,18 @@ const GuiContext = @import("../context.zig").GuiContext;
 const shapes = @import("../shapes.zig");
 const layout_mod = @import("../layout.zig");
 const std = @import("std");
-
-fn darkenColor(color: shapes.Color, factor: f32) shapes.Color {
-    const r: f32 = @floatFromInt((color >> 24) & 0xFF);
-    const g: f32 = @floatFromInt((color >> 16) & 0xFF);
-    const b: f32 = @floatFromInt((color >> 8) & 0xFF);
-    const a: u8 = @intCast(color & 0xFF);
-
-    const new_r: u8 = @intFromFloat(r * factor);
-    const new_g: u8 = @intFromFloat(g * factor);
-    const new_b: u8 = @intFromFloat(b * factor);
-
-    return (@as(u32, new_r) << 24) | (@as(u32, new_g) << 16) | (@as(u32, new_b) << 8) | @as(u32, a);
-}
+const color_utils = @import("../color.zig");
+const theme_mod = @import("../theme.zig");
 
 pub const Options = struct {
     font_size: f32 = 16,
-    color: shapes.Color = 0x546be7FF,
-    font_color: shapes.Color = 0xFFFFFFFF,
+    color: ?shapes.Color = null,
+    font_color: ?shapes.Color = null,
     border_radius: f32 = 4.0,
     padding: layout_mod.Spacing = layout_mod.Spacing.all(6.0),
     item_height: f32 = 32.0,
-    dropdown_bg_color: shapes.Color = 0x2a2a2aFF,
-    dropdown_hover_color: shapes.Color = 0x3a3a3aFF,
+    dropdown_bg_color: ?shapes.Color = null,
+    dropdown_hover_color: ?shapes.Color = null,
 };
 
 pub const DropdownOverlay = struct {
@@ -76,19 +65,40 @@ pub fn dropdown(
         }
     }
 
+    // Get base colors from theme with option overrides
+    const base_color = theme_mod.getColor(
+        ctx.theme,
+        opts.color,
+        "accent_primary",
+        0x4fc3f7FF,
+    );
+
+    const font_color = theme_mod.getColor(
+        ctx.theme,
+        opts.font_color,
+        "text_bright",
+        0xffffffFF,
+    );
+
     // Render button
-    var button_color = opts.color;
+    var button_color = base_color;
     if (button_hovered and ctx.input.mouse_left_pressed) {
-        button_color = darkenColor(opts.color, 0.8);
+        button_color = if (opts.color == null)
+            ctx.theme.accent_pressed
+        else
+            color_utils.darken(base_color, 0.8);
     } else if (button_hovered or is_open) {
-        button_color = darkenColor(opts.color, 0.9);
+        button_color = if (opts.color == null)
+            ctx.theme.accent_hover
+        else
+            color_utils.darken(base_color, 0.9);
     }
 
     try ctx.draw_list.addRoundedRect(button_rect, opts.border_radius, button_color);
 
     const tx = button_rect.x + (button_rect.w - metrics.width) * 0.5;
     const ty = button_rect.y + (button_rect.h - metrics.height) * 0.5;
-    try ctx.addText(tx, ty, label, opts.font_size, opts.font_color);
+    try ctx.addText(tx, ty, label, opts.font_size, font_color);
 
     // Return the selected index if selection changed this frame
     if (ctx.dropdown_selection_changed and ctx.dropdown_selection_id == id) {
@@ -119,8 +129,30 @@ pub fn renderDropdownOverlays(ctx: *GuiContext) !void {
             .h = dropdown_height,
         };
 
+        // Get dropdown colors from theme with option overrides
+        const dropdown_bg_color = theme_mod.getColor(
+            ctx.theme,
+            opts.dropdown_bg_color,
+            "bg_elevated",
+            0x2d2d30FF,
+        );
+
+        const dropdown_hover_color = theme_mod.getColor(
+            ctx.theme,
+            opts.dropdown_hover_color,
+            "bg_hover",
+            0x2a2d2eFF,
+        );
+
+        const font_color = theme_mod.getColor(
+            ctx.theme,
+            opts.font_color,
+            "text_bright",
+            0xffffffFF,
+        );
+
         // Render dropdown background
-        try ctx.draw_list.addRoundedRect(dropdown_rect, opts.border_radius, opts.dropdown_bg_color);
+        try ctx.draw_list.addRoundedRect(dropdown_rect, opts.border_radius, dropdown_bg_color);
 
         var clicked_index: ?usize = null;
 
@@ -140,14 +172,14 @@ pub fn renderDropdownOverlays(ctx: *GuiContext) !void {
             // Highlight hovered item
             if (item_hovered) {
                 ctx.setCursor(ctx.hand_cursor);
-                try ctx.draw_list.addRect(item_rect, opts.dropdown_hover_color);
+                try ctx.draw_list.addRect(item_rect, dropdown_hover_color);
             }
 
             // Render option text
             const item_metrics = try ctx.measureText(option, opts.font_size);
             const item_tx = item_rect.x + opts.padding.left;
             const item_ty = item_rect.y + (item_rect.h - item_metrics.height) * 0.5;
-            try ctx.addText(item_tx, item_ty, option, opts.font_size, opts.font_color);
+            try ctx.addText(item_tx, item_ty, option, opts.font_size, font_color);
 
             // Handle option click
             if (item_clicked) {

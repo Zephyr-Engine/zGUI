@@ -5,12 +5,12 @@ const id = @import("utils.zig").id;
 const shapes = @import("../shapes.zig");
 const window = @import("../window.zig");
 const Cursor = window.Cursor;
+const theme_mod = @import("../theme.zig");
 
-const highlight_color: shapes.Color = 0x00AAFFFF;
 const border_width: f32 = 10.0;
 
 pub const Options = struct {
-    color: shapes.Color = 0x404040FF,
+    color: ?shapes.Color = null,
     border_radius: f32 = 0.0,
     resizable: bool = false,
 };
@@ -182,11 +182,14 @@ fn renderPanel(
         .h = full_height,
     };
 
+    // Get colors from theme with option overrides
+    const panel_color = theme_mod.getColor(ctx.theme, opts.color, "bg_secondary", 0x252526FF);
+
     // Render background
     if (opts.border_radius > 0.0) {
-        try ctx.draw_list.addRoundedRect(final_rect, opts.border_radius, opts.color);
+        try ctx.draw_list.addRoundedRect(final_rect, opts.border_radius, panel_color);
     } else {
-        try ctx.draw_list.addRect(final_rect, opts.color);
+        try ctx.draw_list.addRect(final_rect, panel_color);
     }
 
     // Handle resizing
@@ -209,7 +212,7 @@ fn renderPanel(
         if ((is_hovering or is_active) and (!ctx.resize_state.dragging or is_active)) {
             ctx.setCursor(getCursor(ctx, border));
             const highlight_rect = getHighlightRect(final_rect, border);
-            try ctx.draw_list.addRect(highlight_rect, highlight_color);
+            try ctx.draw_list.addRect(highlight_rect, ctx.theme.resize_border);
         }
     }
 

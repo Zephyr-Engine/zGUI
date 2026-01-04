@@ -2,7 +2,6 @@ const std = @import("std");
 const build_options = @import("build_options");
 
 const btn = @import("gui/widgets/button.zig");
-const checkbox = @import("gui/widgets/checkbox.zig").checkbox;
 const textInput = @import("gui/widgets/input.zig");
 const imageWidget = @import("gui/widgets/image.zig");
 const panelWidget = @import("gui/widgets/panel.zig");
@@ -56,8 +55,6 @@ pub fn main() !void {
     }
     var stats_buffer: [128]u8 = undefined;
 
-    var box = false;
-
     var input_buffer: [256]u8 = undefined;
     var input_len: usize = 0;
 
@@ -105,11 +102,11 @@ pub fn main() !void {
         layout.beginLayout(&gui, layout.hLayout(&gui, .{ .margin = layout.Spacing.all(10), .padding = layout.Spacing.all(12), .height = top_panel_height }));
         _ = try panelWidget.topPanel(&gui, "top", .{ .resizable = false });
 
-        if (try dropdown.dropdown(&gui, 1, "File", &file_options, .{ .font_size = 16, .padding = layout.Spacing.symmetric(6, 12), .color = 0x546be7FF, .border_radius = 4.0, .font_color = 0xFFFFFFFF })) |index| {
+        if (try dropdown.dropdown(&gui, 1, "File", &file_options, .{ .font_size = 16, .padding = layout.Spacing.symmetric(6, 12), .border_radius = 4.0, .font_color = 0xFFFFFFFF })) |index| {
             std.debug.print("File option selected: {s}\n", .{file_options[index]});
         }
 
-        if (try dropdown.dropdown(&gui, 2, "Menu", &menu_options, .{ .font_size = 16, .padding = layout.Spacing.symmetric(6, 12), .color = 0x546be7FF, .border_radius = 4.0, .font_color = 0xFFFFFFFF })) |index| {
+        if (try dropdown.dropdown(&gui, 2, "Menu", &menu_options, .{ .font_size = 16, .padding = layout.Spacing.symmetric(6, 12), .border_radius = 4.0, .font_color = 0xFFFFFFFF })) |index| {
             std.debug.print("Menu option selected: {s}\n", .{menu_options[index]});
         }
 
@@ -124,17 +121,20 @@ pub fn main() !void {
         left_panel_width = left_panel.width;
 
         if (try collapsible.collapsibleSection(&gui, "Buttons", &left_section_open, .{})) {
-            if (btn.button(&gui, "hello world", .{ .font_size = 24, .color = 0xFFC864FF })) {
-                std.debug.print("Button 'hello world' was clicked!\n", .{});
+            if (btn.button(&gui, "Primary", .{})) {
+                std.debug.print("Primary button clicked!\n", .{});
             }
-            if (btn.button(&gui, "small text", .{ .font_size = 16, .font_color = 0xFFFFFFFF, .color = 0xC864FFFF, .border_radius = 8.0, .variant = btn.Variant.OUTLINED })) {
-                std.debug.print("Button 'small text' was clicked!\n", .{});
+            if (btn.button(&gui, "Success", .{ .color = gui.theme.success })) {
+                std.debug.print("Success button clicked!\n", .{});
             }
-            if (box and btn.button(&gui, input_buffer[0..input_len], .{ .font_size = 36, .color = 0x64C8FFFF, .border_radius = 12.0 })) {
-                std.debug.print("Button 'Large Text' was clicked!\n", .{});
+            if (btn.button(&gui, "Error", .{ .color = gui.theme.err })) {
+                std.debug.print("Error button clicked!\n", .{});
             }
-            if (try checkbox(&gui, &box, .{})) {
-                std.debug.print("Toggled Checkbox to: {}\n", .{box});
+            if (btn.button(&gui, "Info", .{ .color = gui.theme.info })) {
+                std.debug.print("Info button clicked!\n", .{});
+            }
+            if (btn.button(&gui, "Warning", .{ .color = gui.theme.warning })) {
+                std.debug.print("Warning button clicked!\n", .{});
             }
             layout.endLayout(&gui);
         }
@@ -180,30 +180,30 @@ pub fn main() !void {
 
         if (try collapsible.collapsibleSection(&gui, "Inputs", &right_section_open, .{})) {
             layout.beginLayout(&gui, layout.hLayout(&gui, .{ .margin = layout.Spacing.only(.{ .right = 4 }), .padding = layout.Spacing.all(0), .height = 60 }));
-            if (try textInput.inputNumber(&gui, &x_coord, .{ .font_size = 18, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 90, .height = 35, .label = "x" })) {
+            if (try textInput.inputNumber(&gui, &x_coord, .{ .font_size = 18, .width = 90, .height = 35, .label = "x" })) {
                 std.debug.print("X changed: {d}\n", .{x_coord});
             }
-            if (try textInput.inputNumber(&gui, &y_coord, .{ .font_size = 18, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 90, .height = 35, .label = "y" })) {
+            if (try textInput.inputNumber(&gui, &y_coord, .{ .font_size = 18, .width = 90, .height = 35, .label = "y" })) {
                 std.debug.print("Y changed: {d}\n", .{y_coord});
             }
-            if (try textInput.inputNumber(&gui, &z_coord, .{ .font_size = 18, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 90, .height = 35, .label = "z" })) {
+            if (try textInput.inputNumber(&gui, &z_coord, .{ .font_size = 18, .width = 90, .height = 35, .label = "z" })) {
                 std.debug.print("Z changed: {d}\n", .{z_coord});
             }
             layout.endLayout(&gui);
 
-            if (try textInput.inputText(&gui, &input_buffer, &input_len, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40, .label = "Text Input" })) {
+            if (try textInput.inputText(&gui, &input_buffer, &input_len, .{ .font_size = 20, .width = 300, .height = 40, .label = "Text Input" })) {
                 std.debug.print("Text changed: {s}\n", .{input_buffer[0..input_len]});
             }
-            if (try textInput.inputNumber(&gui, &f32_value, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40, .label = "Float 32" })) {
+            if (try textInput.inputNumber(&gui, &f32_value, .{ .font_size = 20, .width = 300, .height = 40, .label = "Float 32" })) {
                 std.debug.print("F32 changed: {d}\n", .{f32_value});
             }
-            if (try textInput.inputNumber(&gui, &f64_value, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40, .label = "Float 64" })) {
+            if (try textInput.inputNumber(&gui, &f64_value, .{ .font_size = 20, .width = 300, .height = 40, .label = "Float 64" })) {
                 std.debug.print("F64 changed: {d}\n", .{f64_value});
             }
-            if (try textInput.inputNumber(&gui, &i32_value, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40, .label = "Integer 32" })) {
+            if (try textInput.inputNumber(&gui, &i32_value, .{ .font_size = 20, .width = 300, .height = 40, .label = "Integer 32" })) {
                 std.debug.print("I32 changed: {d}\n", .{i32_value});
             }
-            if (try textInput.inputNumber(&gui, &i64_value, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40, .label = "Integer 64" })) {
+            if (try textInput.inputNumber(&gui, &i64_value, .{ .font_size = 20, .width = 300, .height = 40, .label = "Integer 64" })) {
                 std.debug.print("I64 changed: {d}\n", .{i64_value});
             }
             layout.endLayout(&gui);

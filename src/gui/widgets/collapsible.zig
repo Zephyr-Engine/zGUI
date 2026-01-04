@@ -3,12 +3,13 @@ const GuiContext = @import("../context.zig").GuiContext;
 const shapes = @import("../shapes.zig");
 const layout = @import("../layout.zig");
 const imageWidget = @import("image.zig");
+const theme_mod = @import("../theme.zig");
 
 pub const Options = struct {
     font_size: f32 = 20.0,
-    header_color: shapes.Color = 0x303030FF,
-    text_color: shapes.Color = 0xFFFFFFFF,
-    chevron_color: shapes.Color = 0xFFFFFFFF,
+    header_color: ?shapes.Color = null,
+    text_color: ?shapes.Color = null,
+    chevron_color: ?shapes.Color = null,
     border_radius: f32 = 4.0,
     header_height: f32 = 40.0,
     chevron_size: f32 = 16.0,
@@ -41,7 +42,12 @@ pub fn collapsibleSection(
         is_open.* = !is_open.*;
     }
 
-    try ctx.draw_list.addRoundedRect(header_rect, opts.border_radius, opts.header_color);
+    // Get colors from theme with option overrides
+    const header_color = theme_mod.getColor(ctx.theme, opts.header_color, "bg_hover", 0x2a2d2eFF);
+    const text_color = theme_mod.getColor(ctx.theme, opts.text_color, "text_primary", 0xccccccFF);
+    const chevron_color = theme_mod.getColor(ctx.theme, opts.chevron_color, "text_secondary", 0x9d9d9dFF);
+
+    try ctx.draw_list.addRoundedRect(header_rect, opts.border_radius, header_color);
 
     const chevron_x = header_rect.x + 12;
     const chevron_y = header_rect.y + (opts.header_height - opts.chevron_size) * 0.5;
@@ -58,7 +64,7 @@ pub fn collapsibleSection(
         const v3_x = chevron_center_x + triangle_size * 0.8;
         const v3_y = chevron_center_y - triangle_size * 0.4;
 
-        const rgba = shapes.colorToRGBA(opts.chevron_color);
+        const rgba = shapes.colorToRGBA(chevron_color);
         const v1 = shapes.Vertex{ .pos = .{ v1_x, v1_y }, .color = rgba };
         const v2 = shapes.Vertex{ .pos = .{ v2_x, v2_y }, .color = rgba };
         const v3 = shapes.Vertex{ .pos = .{ v3_x, v3_y }, .color = rgba };
@@ -72,7 +78,7 @@ pub fn collapsibleSection(
         const v3_x = chevron_center_x - triangle_size * 0.4;
         const v3_y = chevron_center_y + triangle_size * 0.8;
 
-        const rgba = shapes.colorToRGBA(opts.chevron_color);
+        const rgba = shapes.colorToRGBA(chevron_color);
         const v1 = shapes.Vertex{ .pos = .{ v1_x, v1_y }, .color = rgba };
         const v2 = shapes.Vertex{ .pos = .{ v2_x, v2_y }, .color = rgba };
         const v3 = shapes.Vertex{ .pos = .{ v3_x, v3_y }, .color = rgba };
@@ -82,7 +88,7 @@ pub fn collapsibleSection(
 
     const text_x = chevron_x + opts.chevron_size + opts.padding;
     const text_y = header_rect.y + (opts.header_height - opts.font_size) * 0.5;
-    try ctx.addText(text_x, text_y, label, opts.font_size, opts.text_color);
+    try ctx.addText(text_x, text_y, label, opts.font_size, text_color);
 
     if (is_open.*) {
         const content_layout = layout.Layout.init(.VERTICAL, header_rect.x, header_rect.y + header_rect.h, .{

@@ -17,6 +17,8 @@ const DropdownOverlay = dropdown.DropdownOverlay;
 const window = @import("window.zig");
 const Window = window.Window;
 const Cursor = window.Cursor;
+const theme_mod = @import("theme.zig");
+const Theme = theme_mod.Theme;
 
 pub const ActiveInputState = struct {
     cursor_pos: usize,
@@ -83,6 +85,7 @@ pub const GuiContext = struct {
     current_font_texture: TextureHandle,
     renderer: *Renderer,
     window: ?Window,
+    theme: *const Theme,
 
     // Optional checkmark image for checkbox widget (can be set by user)
     checkmark_image: ?Image,
@@ -144,6 +147,7 @@ pub const GuiContext = struct {
             .current_font_texture = 0,
             .renderer = renderer,
             .window = win,
+            .theme = &theme_mod.DARK_THEME,
             .checkmark_image = null,
             .window_width = 0.0,
             .window_height = 0.0,
@@ -205,7 +209,6 @@ pub const GuiContext = struct {
     }
 
     /// Direct input injection methods for game engines
-
     /// Inject mouse movement
     pub fn injectMouseMove(self: *GuiContext, x: f64, y: f64) void {
         self.input.cursor_x = x;
@@ -390,5 +393,9 @@ pub const GuiContext = struct {
             }
             self.current_cursor = cursor;
         }
+    }
+
+    pub fn setTheme(self: *GuiContext, new_theme: *const Theme) void {
+        self.theme = new_theme;
     }
 };
