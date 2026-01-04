@@ -14,6 +14,9 @@ pub const InputOptions = struct {
     border_thickness: f32 = 2.0,
     width: f32 = 200.0,
     height: f32 = 40.0,
+    label: ?[]const u8 = null,
+    label_font_size: f32 = 16,
+    label_color: shapes.Color = 0xFFFFFFFF,
 };
 
 fn isWordBoundary(char: u8) bool {
@@ -76,6 +79,12 @@ fn getSelectionRange(state: *const ActiveInputState, cursor_pos: usize, buffer_l
 
 pub fn inputText(ctx: *GuiContext, buffer: []u8, buffer_len: *usize, opts: InputOptions) !bool {
     const layout = ctx.getCurrentLayout();
+
+    if (opts.label) |label| {
+        const label_metrics = try ctx.measureText(label, opts.label_font_size);
+        const label_rect = layout.allocateSpace(ctx, label_metrics.width, opts.label_font_size);
+        try ctx.addText(label_rect.x, label_rect.y + 5, label, opts.label_font_size, opts.label_color);
+    }
 
     const rect = layout.allocateSpace(ctx, opts.width, opts.height);
     const id = @intFromPtr(buffer.ptr);
@@ -332,37 +341,37 @@ fn inputInternal(
                 const len = std.mem.len(content);
                 const slice = content[0..len];
 
-            if (hasSelection(&state, state.cursor_pos)) {
-                if (getSelectionRange(&state, state.cursor_pos, buffer_len.*)) |range| {
-                    const bytes_to_remove = range.end - range.start;
-                    std.mem.copyForwards(u8, buffer[range.start .. buffer_len.* - bytes_to_remove], buffer[range.end..buffer_len.*]);
-                    buffer_len.* -= bytes_to_remove;
-                    state.cursor_pos = range.start;
-                    state.selection_start = null;
-                    text_changed = true;
+                if (hasSelection(&state, state.cursor_pos)) {
+                    if (getSelectionRange(&state, state.cursor_pos, buffer_len.*)) |range| {
+                        const bytes_to_remove = range.end - range.start;
+                        std.mem.copyForwards(u8, buffer[range.start .. buffer_len.* - bytes_to_remove], buffer[range.end..buffer_len.*]);
+                        buffer_len.* -= bytes_to_remove;
+                        state.cursor_pos = range.start;
+                        state.selection_start = null;
+                        text_changed = true;
+                    }
                 }
-            }
 
-            if (buffer_len.* + len <= buffer.len) {
-                if (state.cursor_pos < buffer_len.*) {
-                    std.mem.copyBackwards(
+                if (buffer_len.* + len <= buffer.len) {
+                    if (state.cursor_pos < buffer_len.*) {
+                        std.mem.copyBackwards(
+                            u8,
+                            buffer[state.cursor_pos + len .. buffer_len.* + len],
+                            buffer[state.cursor_pos..buffer_len.*],
+                        );
+                    }
+
+                    std.mem.copyForwards(
                         u8,
-                        buffer[state.cursor_pos + len .. buffer_len.* + len],
-                        buffer[state.cursor_pos..buffer_len.*],
+                        buffer[state.cursor_pos .. state.cursor_pos + len],
+                        slice,
                     );
+
+                    state.cursor_pos += len;
+                    buffer_len.* += len;
+                    text_changed = true;
+                    state.cursor_blink_time = window.getTime();
                 }
-
-                std.mem.copyForwards(
-                    u8,
-                    buffer[state.cursor_pos .. state.cursor_pos + len],
-                    slice,
-                );
-
-                state.cursor_pos += len;
-                buffer_len.* += len;
-                text_changed = true;
-                state.cursor_blink_time = window.getTime();
-            }
             }
         }
 
@@ -614,6 +623,14 @@ fn inputNumberGeneric(
 
 pub fn inputNumber(ctx: *GuiContext, value: anytype, opts: InputOptions) !bool {
     const layout = ctx.getCurrentLayout();
+
+    // Render label if provided
+    if (opts.label) |label| {
+        const label_metrics = try ctx.measureText(label, opts.label_font_size);
+        const label_rect = layout.allocateSpace(ctx, label_metrics.width, opts.label_font_size);
+        try ctx.addText(label_rect.x, label_rect.y + 5, label, opts.label_font_size, opts.label_color);
+    }
+
     const rect = layout.allocateSpace(ctx, opts.width, opts.height);
     const T = @TypeOf(value);
     const type_info = @typeInfo(T);

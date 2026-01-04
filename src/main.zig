@@ -175,19 +175,19 @@ pub fn main() !void {
         right_panel_width = right_panel.width;
 
         if (try collapsible.collapsibleSection(&gui, "Inputs", &right_section_open, .{})) {
-            if (try textInput.inputText(&gui, &input_buffer, &input_len, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40 })) {
+            if (try textInput.inputText(&gui, &input_buffer, &input_len, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40, .label = "Text Input" })) {
                 std.debug.print("Text changed: {s}\n", .{input_buffer[0..input_len]});
             }
-            if (try textInput.inputNumber(&gui, &f32_value, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40 })) {
+            if (try textInput.inputNumber(&gui, &f32_value, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40, .label = "Float 32" })) {
                 std.debug.print("F32 changed: {d}\n", .{f32_value});
             }
-            if (try textInput.inputNumber(&gui, &f64_value, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40 })) {
+            if (try textInput.inputNumber(&gui, &f64_value, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40, .label = "Float 64" })) {
                 std.debug.print("F64 changed: {d}\n", .{f64_value});
             }
-            if (try textInput.inputNumber(&gui, &i32_value, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40 })) {
+            if (try textInput.inputNumber(&gui, &i32_value, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40, .label = "Integer 32" })) {
                 std.debug.print("I32 changed: {d}\n", .{i32_value});
             }
-            if (try textInput.inputNumber(&gui, &i64_value, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40 })) {
+            if (try textInput.inputNumber(&gui, &i64_value, .{ .font_size = 20, .color = 0x666666FF, .text_color = 0xFFFFFFFF, .width = 300, .height = 40, .label = "Integer 64" })) {
                 std.debug.print("I64 changed: {d}\n", .{i64_value});
             }
             layout.endLayout(&gui);

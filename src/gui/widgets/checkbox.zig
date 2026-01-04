@@ -1,6 +1,5 @@
 const GuiContext = @import("../context.zig").GuiContext;
 const shapes = @import("../shapes.zig");
-const imageWidget = @import("image.zig");
 
 pub const CheckboxOptions = struct {
     size: f32 = 24.0,
@@ -23,20 +22,10 @@ pub fn checkbox(ctx: *GuiContext, checked: *bool, opts: CheckboxOptions) !bool {
         checked.* = !checked.*;
     }
 
-    try ctx.draw_list.addRoundedRectOutline(rect, opts.border_radius, opts.border_thickness, opts.color);
     if (checked.*) {
-        // Only render checkmark if image is available
-        if (ctx.checkmark_image) |*img| {
-            const padding = opts.size * 0.15;
-            const checkmark_size = opts.size - (padding * 2);
-            const checkmark_x = rect.x + padding;
-            const checkmark_y = rect.y + padding;
-
-            try imageWidget.imageAt(ctx, checkmark_x, checkmark_y, img, .{
-                .width = checkmark_size,
-                .height = checkmark_size,
-            });
-        }
+        try ctx.draw_list.addRoundedRect(rect, opts.border_radius, opts.color);
+    } else {
+        try ctx.draw_list.addRoundedRectOutline(rect, opts.border_radius, opts.border_thickness, opts.color);
     }
 
     return is_clicked;
