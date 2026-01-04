@@ -74,7 +74,6 @@ pub const Input = struct {
     // Keyboard input
     chars_buffer: [32]u32,
     chars_count: usize,
-    keys_pressed: [512]bool,
     keys_just_pressed: [512]bool,
 
     ctrl_pressed: bool,
@@ -102,7 +101,6 @@ pub const Input = struct {
             .scroll_y = 0,
             .chars_buffer = [_]u32{0} ** 32,
             .chars_count = 0,
-            .keys_pressed = [_]bool{false} ** 512,
             .keys_just_pressed = [_]bool{false} ** 512,
             .ctrl_pressed = false,
             .alt_pressed = false,
@@ -182,23 +180,12 @@ pub const Input = struct {
             const key_idx: usize = @intCast(key);
             const press_val = @intFromEnum(window_mod.KeyAction.press);
             const repeat_val = @intFromEnum(window_mod.KeyAction.repeat);
-            const release_val = @intFromEnum(window_mod.KeyAction.release);
+            // const release_val = @intFromEnum(window_mod.KeyAction.release);
 
             if (action == press_val or action == repeat_val) {
                 self.keys_just_pressed[key_idx] = true;
-                self.keys_pressed[key_idx] = true;
-            } else if (action == release_val) {
-                self.keys_pressed[key_idx] = false;
             }
         }
-    }
-
-    pub fn isKeyPressed(self: *const Input, key: c_int) bool {
-        if (key >= 0 and key < 512) {
-            const key_idx: usize = @intCast(key);
-            return self.keys_pressed[key_idx];
-        }
-        return false;
     }
 
     pub fn isKeyJustPressed(self: *const Input, key: c_int) bool {
