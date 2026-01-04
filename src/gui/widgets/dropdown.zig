@@ -1,5 +1,6 @@
 const GuiContext = @import("../context.zig").GuiContext;
 const shapes = @import("../shapes.zig");
+const layout_mod = @import("../layout.zig");
 const std = @import("std");
 
 fn darkenColor(color: shapes.Color, factor: f32) shapes.Color {
@@ -20,7 +21,7 @@ pub const Options = struct {
     color: shapes.Color = 0x546be7FF,
     font_color: shapes.Color = 0xFFFFFFFF,
     border_radius: f32 = 4.0,
-    padding: f32 = 6.0,
+    padding: layout_mod.Spacing = layout_mod.Spacing.all(6.0),
     item_height: f32 = 32.0,
     dropdown_bg_color: shapes.Color = 0x2a2a2aFF,
     dropdown_hover_color: shapes.Color = 0x3a3a3aFF,
@@ -46,8 +47,8 @@ pub fn dropdown(
 
     // Measure button dimensions
     const metrics = try ctx.measureText(label, opts.font_size);
-    const button_width = metrics.width + opts.padding * 2;
-    const button_height = metrics.height + opts.padding * 2;
+    const button_width = metrics.width + opts.padding.left + opts.padding.right;
+    const button_height = metrics.height + opts.padding.top + opts.padding.bottom;
     const button_rect = layout.allocateSpace(ctx, button_width, button_height);
 
     const is_open = ctx.active_dropdown_id != null and ctx.active_dropdown_id.? == id;
@@ -144,7 +145,7 @@ pub fn renderDropdownOverlays(ctx: *GuiContext) !void {
 
             // Render option text
             const item_metrics = try ctx.measureText(option, opts.font_size);
-            const item_tx = item_rect.x + opts.padding;
+            const item_tx = item_rect.x + opts.padding.left;
             const item_ty = item_rect.y + (item_rect.h - item_metrics.height) * 0.5;
             try ctx.addText(item_tx, item_ty, option, opts.font_size, opts.font_color);
 

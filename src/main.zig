@@ -105,11 +105,11 @@ pub fn main() !void {
         layout.beginLayout(&gui, layout.hLayout(&gui, .{ .margin = layout.Spacing.all(10), .padding = layout.Spacing.all(12), .height = top_panel_height }));
         _ = try panelWidget.topPanel(&gui, "top", .{ .resizable = false });
 
-        if (try dropdown.dropdown(&gui, 1, "File", &file_options, .{ .font_size = 16, .padding = 6, .color = 0x546be7FF, .border_radius = 4.0, .font_color = 0xFFFFFFFF })) |index| {
+        if (try dropdown.dropdown(&gui, 1, "File", &file_options, .{ .font_size = 16, .padding = layout.Spacing.symmetric(6, 12), .color = 0x546be7FF, .border_radius = 4.0, .font_color = 0xFFFFFFFF })) |index| {
             std.debug.print("File option selected: {s}\n", .{file_options[index]});
         }
 
-        if (try dropdown.dropdown(&gui, 2, "Menu", &menu_options, .{ .font_size = 16, .padding = 6, .color = 0x546be7FF, .border_radius = 4.0, .font_color = 0xFFFFFFFF })) |index| {
+        if (try dropdown.dropdown(&gui, 2, "Menu", &menu_options, .{ .font_size = 16, .padding = layout.Spacing.symmetric(6, 12), .color = 0x546be7FF, .border_radius = 4.0, .font_color = 0xFFFFFFFF })) |index| {
             std.debug.print("Menu option selected: {s}\n", .{menu_options[index]});
         }
 
