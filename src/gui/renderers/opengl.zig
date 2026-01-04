@@ -359,6 +359,7 @@ pub fn createRenderer(allocator: std.mem.Allocator, window: anytype) !Renderer {
     // Set up OpenGL state
     gl.glEnable(gl.GL_BLEND);
     gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA);
+    gl.glEnable(gl.GL_MULTISAMPLE); // Enable MSAA for smooth edges
     gl.glClearColor(0.55, 0.55, 0.55, 1.0);
 
     const gl_renderer = try allocator.create(GLRenderer);
