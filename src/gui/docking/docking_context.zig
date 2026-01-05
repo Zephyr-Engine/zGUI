@@ -7,6 +7,7 @@ const SplitDirection = @import("dock_node.zig").SplitDirection;
 const PanelInfo = @import("panel_info.zig").PanelInfo;
 const drop_zone = @import("drop_zone.zig");
 const DropZone = drop_zone.DropZone;
+const persistence = @import("layout_persistence.zig");
 
 pub const DragState = struct {
     dragging: bool = false,
@@ -80,6 +81,26 @@ pub const DockingContext = struct {
                 }
             }
         }
+    }
+
+    /// Save the current layout to a file
+    pub fn saveLayout(self: *DockingContext, file_path: []const u8) !void {
+        try persistence.saveLayoutToFile(self.allocator, self.dock_space.root, file_path);
+    }
+
+    /// Load layout from a file
+    /// Returns true if layout was loaded, false if file doesn't exist
+    pub fn loadLayout(self: *DockingContext, file_path: []const u8) !bool {
+        const loaded_root = try persistence.loadLayoutFromFile(self.allocator, file_path);
+        if (loaded_root) |root| {
+            // Free existing root if any
+            if (self.dock_space.root) |old_root| {
+                old_root.deinit();
+            }
+            self.dock_space.root = root;
+            return true;
+        }
+        return false;
     }
 
     /// Main render function - entry point

@@ -113,11 +113,17 @@ pub fn main() !void {
         .min_height = 100,
     });
 
-    // Add panels to docking system (they'll all start in one tab group)
-    try docking_ctx.addPanel(utils.id("scene"));
-    try docking_ctx.addPanel(utils.id("hierarchy"));
-    try docking_ctx.addPanel(utils.id("inspector"));
-    try docking_ctx.addPanel(utils.id("console"));
+    // Try to load saved layout, or use default layout
+    const layout_file = "zgui_layout.txt";
+    const layout_loaded = try docking_ctx.loadLayout(layout_file);
+
+    if (!layout_loaded) {
+        // No saved layout - add panels to docking system (they'll all start in one tab group)
+        try docking_ctx.addPanel(utils.id("scene"));
+        try docking_ctx.addPanel(utils.id("hierarchy"));
+        try docking_ctx.addPanel(utils.id("inspector"));
+        try docking_ctx.addPanel(utils.id("console"));
+    }
 
     while (!window.shouldClose()) {
         if (comptime build_options.debug) {
@@ -192,6 +198,9 @@ pub fn main() !void {
 
         window.swapBuffers();
     }
+
+    // Save layout before exit
+    try docking_ctx.saveLayout(layout_file);
 
     // Process any remaining events
     Window.pollEvents();
