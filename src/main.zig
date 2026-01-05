@@ -4,9 +4,9 @@ const build_options = @import("build_options");
 const btn = @import("gui/widgets/button.zig");
 const textInput = @import("gui/widgets/input.zig");
 const imageWidget = @import("gui/widgets/image.zig");
-const panelWidget = @import("gui/widgets/panel.zig");
 const dropdown = @import("gui/widgets/dropdown.zig");
 const collapsible = @import("gui/widgets/collapsible.zig");
+const utils = @import("gui/widgets/utils.zig");
 const layout = @import("gui/layout.zig");
 const opengl = @import("gui/renderers/opengl.zig");
 const GuiContext = @import("gui/context.zig").GuiContext;
@@ -15,12 +15,14 @@ const input = @import("gui/input.zig");
 const DebugStats = @import("gui/debug_stats.zig").DebugStats;
 const window_mod = @import("gui/window.zig");
 const Window = window_mod.Window;
+const DockingContext = @import("gui/docking/docking_context.zig").DockingContext;
+const PanelInfo = @import("gui/docking/panel_info.zig").PanelInfo;
 
 pub fn main() !void {
     try Window.init();
     defer Window.deinit();
 
-    const window = try Window.create(1920, 1080, "zgui");
+    const window = try Window.create(1920, 1080, "zGUI - Docking Demo");
     defer window.destroy();
 
     window.makeContextCurrent();
@@ -55,25 +57,6 @@ pub fn main() !void {
     }
     var stats_buffer: [128]u8 = undefined;
 
-    var input_buffer: [256]u8 = undefined;
-    var input_len: usize = 0;
-
-    var left_section_open = true;
-    var right_section_open = true;
-
-    var left_panel_width: f32 = 250;
-    var right_panel_width: f32 = 350;
-    var bottom_panel_height: f32 = 300;
-
-    var f32_value: f32 = 42.5;
-    var f64_value: f64 = 3.14159265359;
-    var i32_value: i32 = -123;
-    var i64_value: i64 = 9876543210;
-
-    var x_coord: f32 = 0.0;
-    var y_coord: f32 = 0.0;
-    var z_coord: f32 = 0.0;
-
     var fb_width: i32 = 0;
     var fb_height: i32 = 0;
     window.getFramebufferSize(&fb_width, &fb_height);
@@ -81,7 +64,60 @@ pub fn main() !void {
 
     const file_options = [_][]const u8{ "New", "Open", "Save", "Save As", "Exit" };
     const menu_options = [_][]const u8{ "Preferences", "Settings", "About" };
-    const top_panel_height: f32 = 40;
+    const top_panel_height: f32 = 50;
+
+    // Create docking context
+    const dock_bounds = shapes.Rect{
+        .x = 0,
+        .y = top_panel_height,
+        .w = gui.window_width,
+        .h = gui.window_height - top_panel_height,
+    };
+    var docking_ctx = try DockingContext.init(allocator, dock_bounds);
+    defer docking_ctx.deinit();
+
+    // Register panels
+    try docking_ctx.registerPanel(PanelInfo{
+        .id = utils.id("scene"),
+        .title = "Scene",
+        .render_fn = renderScenePanel,
+        .closable = false,
+        .min_width = 300,
+        .min_height = 300,
+    });
+
+    try docking_ctx.registerPanel(PanelInfo{
+        .id = utils.id("hierarchy"),
+        .title = "Hierarchy",
+        .render_fn = renderHierarchyPanel,
+        .closable = true,
+        .min_width = 200,
+        .min_height = 200,
+    });
+
+    try docking_ctx.registerPanel(PanelInfo{
+        .id = utils.id("inspector"),
+        .title = "Inspector",
+        .render_fn = renderInspectorPanel,
+        .closable = true,
+        .min_width = 250,
+        .min_height = 200,
+    });
+
+    try docking_ctx.registerPanel(PanelInfo{
+        .id = utils.id("console"),
+        .title = "Console",
+        .render_fn = renderConsolePanel,
+        .closable = true,
+        .min_width = 200,
+        .min_height = 100,
+    });
+
+    // Add panels to docking system (they'll all start in one tab group)
+    try docking_ctx.addPanel(utils.id("scene"));
+    try docking_ctx.addPanel(utils.id("hierarchy"));
+    try docking_ctx.addPanel(utils.id("inspector"));
+    try docking_ctx.addPanel(utils.id("console"));
 
     while (!window.shouldClose()) {
         if (comptime build_options.debug) {
@@ -95,123 +131,50 @@ pub fn main() !void {
             continue;
         }
 
-        const center_width = gui.window_width - left_panel_width - right_panel_width;
+        // Update dock bounds if window resized
+        docking_ctx.dock_space.bounds = shapes.Rect{
+            .x = 0,
+            .y = top_panel_height,
+            .w = gui.window_width,
+            .h = gui.window_height - top_panel_height,
+        };
 
-        layout.beginLayout(&gui, layout.vLayout(&gui, .{ .margin = layout.Spacing.all(0), .padding = layout.Spacing.all(0), .height = gui.window_height }));
+        // Render top menu bar (outside dock space)
+        // Draw background for menu bar
+        const menu_bar_rect = shapes.Rect{
+            .x = 0,
+            .y = 0,
+            .w = gui.window_width,
+            .h = top_panel_height,
+        };
+        try gui.draw_list.addRect(menu_bar_rect, gui.theme.bg_secondary);
 
-        layout.beginLayout(&gui, layout.hLayout(&gui, .{ .margin = layout.Spacing.all(10), .padding = layout.Spacing.all(12), .height = top_panel_height }));
-        _ = try panelWidget.topPanel(&gui, "top", .{ .resizable = false });
+        layout.beginLayout(&gui, layout.hLayout(&gui, .{
+            .margin = layout.Spacing.all(10),
+            .padding = layout.Spacing.all(12),
+            .height = top_panel_height,
+        }));
 
-        if (try dropdown.dropdown(&gui, 1, "File", &file_options, .{ .font_size = 16, .padding = layout.Spacing.symmetric(6, 12), .border_radius = 4.0, .font_color = 0xFFFFFFFF })) |index| {
+        if (try dropdown.dropdown(&gui, 1, "File", &file_options, .{
+            .font_size = 16,
+            .padding = layout.Spacing.symmetric(6, 12),
+            .border_radius = 4.0,
+        })) |index| {
             std.debug.print("File option selected: {s}\n", .{file_options[index]});
         }
 
-        if (try dropdown.dropdown(&gui, 2, "Menu", &menu_options, .{ .font_size = 16, .padding = layout.Spacing.symmetric(6, 12), .border_radius = 4.0, .font_color = 0xFFFFFFFF })) |index| {
+        if (try dropdown.dropdown(&gui, 2, "Menu", &menu_options, .{
+            .font_size = 16,
+            .padding = layout.Spacing.symmetric(6, 12),
+            .border_radius = 4.0,
+        })) |index| {
             std.debug.print("Menu option selected: {s}\n", .{menu_options[index]});
         }
 
         layout.endLayout(&gui);
 
-        // Main content area - horizontal layout
-        layout.beginLayout(&gui, layout.hLayout(&gui, .{ .margin = layout.Spacing.all(0), .padding = layout.Spacing.all(0), .height = gui.window_height - top_panel_height }));
-
-        // Left sidebar - vertical layout with buttons and checkbox (left aligned)
-        layout.beginLayout(&gui, layout.vLayout(&gui, .{ .margin = layout.Spacing.all(0), .padding = layout.Spacing.all(16), .width = left_panel_width }));
-        const left_panel = try panelWidget.leftPanel(&gui, "left", .{ .resizable = true });
-        left_panel_width = left_panel.width;
-
-        if (try collapsible.collapsibleSection(&gui, "Buttons", &left_section_open, .{})) {
-            if (btn.button(&gui, "Primary", .{})) {
-                std.debug.print("Primary button clicked!\n", .{});
-            }
-            if (btn.button(&gui, "Success", .{ .color = gui.theme.success })) {
-                std.debug.print("Success button clicked!\n", .{});
-            }
-            if (btn.button(&gui, "Error", .{ .color = gui.theme.err })) {
-                std.debug.print("Error button clicked!\n", .{});
-            }
-            if (btn.button(&gui, "Info", .{ .color = gui.theme.info })) {
-                std.debug.print("Info button clicked!\n", .{});
-            }
-            if (btn.button(&gui, "Warning", .{ .color = gui.theme.warning })) {
-                std.debug.print("Warning button clicked!\n", .{});
-            }
-            layout.endLayout(&gui);
-        }
-        layout.endLayout(&gui);
-
-        // Center column - new vertical layout container
-
-        layout.beginLayout(&gui, layout.vLayout(&gui, .{
-            .padding = layout.Spacing.all(0),
-            .width = center_width,
-        }));
-
-        // Image widget - centered within vertical layout (leaves room for bottom panel)
-        layout.beginLayout(&gui, layout.vLayout(&gui, .{
-            .padding = layout.Spacing.all(0),
-            .width = center_width,
-            .height = gui.window_height - bottom_panel_height,
-            .align_horizontal = .CENTER,
-            .align_vertical = .CENTER,
-        }));
-        if (gui.checkmark_image) |*img| {
-            try imageWidget.image(&gui, img, .{});
-        }
-        layout.endLayout(&gui);
-
-        // Bottom panel - sibling to image container, follows sequentially
-        layout.beginLayout(&gui, layout.hLayout(&gui, .{
-            .margin = layout.Spacing.all(0),
-            .padding = layout.Spacing.all(0),
-            .height = bottom_panel_height,
-            .width = center_width,
-        }));
-        const bottom_panel = try panelWidget.bottomPanel(&gui, "bottom", .{ .resizable = true });
-        bottom_panel_height = bottom_panel.height;
-        layout.endLayout(&gui);
-
-        layout.endLayout(&gui); // End center column vLayout
-
-        // Right sidebar - vertical layout with input fields (bottom aligned)
-        layout.beginLayout(&gui, layout.vLayout(&gui, .{ .margin = layout.Spacing.all(0), .padding = layout.Spacing.all(16), .width = right_panel_width }));
-        const right_panel = try panelWidget.rightPanel(&gui, "right", .{ .resizable = true });
-        right_panel_width = right_panel.width;
-
-        if (try collapsible.collapsibleSection(&gui, "Inputs", &right_section_open, .{})) {
-            layout.beginLayout(&gui, layout.hLayout(&gui, .{ .margin = layout.Spacing.only(.{ .right = 4 }), .padding = layout.Spacing.all(0), .height = 60 }));
-            if (try textInput.inputNumber(&gui, &x_coord, .{ .font_size = 18, .width = 90, .height = 35, .label = "x" })) {
-                std.debug.print("X changed: {d}\n", .{x_coord});
-            }
-            if (try textInput.inputNumber(&gui, &y_coord, .{ .font_size = 18, .width = 90, .height = 35, .label = "y" })) {
-                std.debug.print("Y changed: {d}\n", .{y_coord});
-            }
-            if (try textInput.inputNumber(&gui, &z_coord, .{ .font_size = 18, .width = 90, .height = 35, .label = "z" })) {
-                std.debug.print("Z changed: {d}\n", .{z_coord});
-            }
-            layout.endLayout(&gui);
-
-            if (try textInput.inputText(&gui, &input_buffer, &input_len, .{ .font_size = 20, .width = 300, .height = 40, .label = "Text Input" })) {
-                std.debug.print("Text changed: {s}\n", .{input_buffer[0..input_len]});
-            }
-            if (try textInput.inputNumber(&gui, &f32_value, .{ .font_size = 20, .width = 300, .height = 40, .label = "Float 32" })) {
-                std.debug.print("F32 changed: {d}\n", .{f32_value});
-            }
-            if (try textInput.inputNumber(&gui, &f64_value, .{ .font_size = 20, .width = 300, .height = 40, .label = "Float 64" })) {
-                std.debug.print("F64 changed: {d}\n", .{f64_value});
-            }
-            if (try textInput.inputNumber(&gui, &i32_value, .{ .font_size = 20, .width = 300, .height = 40, .label = "Integer 32" })) {
-                std.debug.print("I32 changed: {d}\n", .{i32_value});
-            }
-            if (try textInput.inputNumber(&gui, &i64_value, .{ .font_size = 20, .width = 300, .height = 40, .label = "Integer 64" })) {
-                std.debug.print("I64 changed: {d}\n", .{i64_value});
-            }
-            layout.endLayout(&gui);
-        }
-        layout.endLayout(&gui);
-
-        layout.endLayout(&gui); // End main content area horizontal layout
-        layout.endLayout(&gui); // End outer vertical layout
+        // Render docked panels
+        try docking_ctx.render(&gui);
 
         if (comptime build_options.debug) {
             const stats_text = try debug_stats.format(&stats_buffer);
@@ -232,4 +195,86 @@ pub fn main() !void {
 
     // Process any remaining events
     Window.pollEvents();
+}
+
+// Panel render callbacks
+
+fn renderScenePanel(ctx: *GuiContext, bounds: shapes.Rect) !void {
+    // Render centered image if available
+    if (ctx.checkmark_image) |*img| {
+        const img_x = bounds.x + (bounds.w - @as(f32, @floatFromInt(img.width))) * 0.5;
+        const img_y = bounds.y + (bounds.h - @as(f32, @floatFromInt(img.height))) * 0.5;
+
+        const img_rect = shapes.Rect{
+            .x = img_x,
+            .y = img_y,
+            .w = @floatFromInt(img.width),
+            .h = @floatFromInt(img.height),
+        };
+        try ctx.draw_list.setTexture(img.texture);
+        try ctx.draw_list.addRectUV(img_rect, .{ 0, 0 }, .{ 1, 1 }, 0xFFFFFFFF);
+    }
+
+    // Label
+    const label = "Scene Viewport";
+    const label_x = bounds.x + 20;
+    const label_y = bounds.y + 20;
+    try ctx.addText(label_x, label_y, label, 20, ctx.theme.text_primary);
+}
+
+fn renderHierarchyPanel(ctx: *GuiContext, bounds: shapes.Rect) !void {
+    var y = bounds.y + 16; // Start with padding
+    const x = bounds.x + 16;
+
+    try ctx.addText(x, y, "Scene Objects:", 18, ctx.theme.text_primary);
+    y += 24; // Line height
+
+    // Placeholder hierarchy
+    const items = [_][]const u8{
+        "  - Camera",
+        "  - Directional Light",
+        "  - Player",
+        "  - Ground Plane",
+        "  - Obstacles",
+    };
+
+    for (items) |item| {
+        try ctx.addText(x, y, item, 16, ctx.theme.text_secondary);
+        y += 20; // Line height
+    }
+}
+
+fn renderInspectorPanel(ctx: *GuiContext, bounds: shapes.Rect) !void {
+    var y = bounds.y + 16; // Start with padding
+    const x = bounds.x + 16;
+
+    try ctx.addText(x, y, "Inspector Panel", 18, ctx.theme.text_primary);
+    y += 26; // Line height
+
+    try ctx.addText(x, y, "Object Properties:", 16, ctx.theme.text_primary);
+    y += 22; // Line height
+
+    try ctx.addText(x, y, "  Position: (0, 0, 0)", 14, ctx.theme.text_secondary);
+    y += 18;
+
+    try ctx.addText(x, y, "  Rotation: (0, 0, 0)", 14, ctx.theme.text_secondary);
+    y += 18;
+
+    try ctx.addText(x, y, "  Scale: (1, 1, 1)", 14, ctx.theme.text_secondary);
+}
+
+fn renderConsolePanel(ctx: *GuiContext, bounds: shapes.Rect) !void {
+    var y = bounds.y + 16; // Start with padding
+    const x = bounds.x + 16;
+
+    try ctx.addText(x, y, "Console Output", 18, ctx.theme.text_primary);
+    y += 24; // Line height
+
+    try ctx.addText(x, y, "> Application started", 14, 0x00FF00FF); // Green
+    y += 18;
+
+    try ctx.addText(x, y, "> Docking system initialized", 14, 0x00FF00FF);
+    y += 18;
+
+    try ctx.addText(x, y, "> Ready", 14, 0x00FF00FF);
 }
