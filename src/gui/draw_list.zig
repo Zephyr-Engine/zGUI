@@ -11,26 +11,83 @@ pub const DrawCmd = struct {
 
 pub const DrawList = struct {
     allocator: std.mem.Allocator,
-    vertices: std.ArrayList(shapes.Vertex),
-    indices: std.ArrayList(u32),
-    commands: std.ArrayList(DrawCmd),
+
+    // Dynamic slices - allocated from frame arena each frame
+    vertices: []shapes.Vertex,
+    vertex_count: usize,
+
+    indices: []u32,
+    index_count: usize,
+
+    commands: []DrawCmd,
+    command_count: usize,
+
     current_texture: TextureHandle,
 
-    pub fn init(allocator: std.mem.Allocator) DrawList {
+    // Initial capacity estimates for frame allocation
+    const INITIAL_VERTEX_CAPACITY = 4096;
+    const INITIAL_INDEX_CAPACITY = 8192;
+    const INITIAL_COMMAND_CAPACITY = 64;
+
+    pub fn init(allocator: std.mem.Allocator) !DrawList {
         return DrawList{
             .allocator = allocator,
-            .vertices = .empty,
-            .indices = .empty,
-            .commands = .empty,
+            .vertices = try allocator.alloc(shapes.Vertex, INITIAL_VERTEX_CAPACITY),
+            .vertex_count = 0,
+            .indices = try allocator.alloc(u32, INITIAL_INDEX_CAPACITY),
+            .index_count = 0,
+            .commands = try allocator.alloc(DrawCmd, INITIAL_COMMAND_CAPACITY),
+            .command_count = 0,
             .current_texture = 0,
         };
     }
 
-    pub fn clear(self: *DrawList) void {
-        self.vertices.clearRetainingCapacity();
-        self.indices.clearRetainingCapacity();
-        self.commands.clearRetainingCapacity();
-        self.current_texture = 0;
+    // No clear() needed - we just reset counters and allocate fresh each frame
+    // No deinit() needed - frame arena handles cleanup
+
+    /// Get the currently used vertices slice
+    pub fn getVertices(self: *const DrawList) []const shapes.Vertex {
+        return self.vertices[0..self.vertex_count];
+    }
+
+    /// Get the currently used indices slice
+    pub fn getIndices(self: *const DrawList) []const u32 {
+        return self.indices[0..self.index_count];
+    }
+
+    /// Get the currently used commands slice
+    pub fn getCommands(self: *const DrawList) []const DrawCmd {
+        return self.commands[0..self.command_count];
+    }
+
+    fn ensureVertexCapacity(self: *DrawList, additional: usize) !void {
+        const required = self.vertex_count + additional;
+        if (required > self.vertices.len) {
+            const new_capacity = @max(required, self.vertices.len * 2);
+            const new_vertices = try self.allocator.alloc(shapes.Vertex, new_capacity);
+            @memcpy(new_vertices[0..self.vertex_count], self.vertices[0..self.vertex_count]);
+            self.vertices = new_vertices;
+        }
+    }
+
+    fn ensureIndexCapacity(self: *DrawList, additional: usize) !void {
+        const required = self.index_count + additional;
+        if (required > self.indices.len) {
+            const new_capacity = @max(required, self.indices.len * 2);
+            const new_indices = try self.allocator.alloc(u32, new_capacity);
+            @memcpy(new_indices[0..self.index_count], self.indices[0..self.index_count]);
+            self.indices = new_indices;
+        }
+    }
+
+    fn ensureCommandCapacity(self: *DrawList, additional: usize) !void {
+        const required = self.command_count + additional;
+        if (required > self.commands.len) {
+            const new_capacity = @max(required, self.commands.len * 2);
+            const new_commands = try self.allocator.alloc(DrawCmd, new_capacity);
+            @memcpy(new_commands[0..self.command_count], self.commands[0..self.command_count]);
+            self.commands = new_commands;
+        }
     }
 
     pub fn setTexture(self: *DrawList, texture: TextureHandle) !void {
@@ -38,44 +95,55 @@ pub const DrawList = struct {
             self.current_texture = texture;
 
             // Start a new draw command for this texture
-            if (self.commands.items.len > 0) {
+            if (self.command_count > 0) {
                 // Close the previous command
-                const prev_cmd = &self.commands.items[self.commands.items.len - 1];
-                const current_index: u32 = @intCast(self.indices.items.len);
+                const prev_cmd = &self.commands[self.command_count - 1];
+                const current_index: u32 = @intCast(self.index_count);
                 prev_cmd.elem_count = current_index - prev_cmd.index_offset;
             }
             // Add new command
-            try self.commands.append(self.allocator, DrawCmd{
+            try self.ensureCommandCapacity(1);
+            self.commands[self.command_count] = DrawCmd{
                 .texture = texture,
                 .elem_count = 0,
-                .index_offset = @intCast(self.indices.items.len),
-            });
+                .index_offset = @intCast(self.index_count),
+            };
+            self.command_count += 1;
         }
     }
 
     fn ensureDrawCmd(self: *DrawList) !void {
-        if (self.commands.items.len == 0) {
-            try self.commands.append(self.allocator, DrawCmd{
+        if (self.command_count == 0) {
+            try self.ensureCommandCapacity(1);
+            self.commands[self.command_count] = DrawCmd{
                 .texture = self.current_texture,
                 .elem_count = 0,
                 .index_offset = 0,
-            });
+            };
+            self.command_count += 1;
         }
     }
 
     fn updateCurrentCmd(self: *DrawList) void {
-        if (self.commands.items.len > 0) {
-            const cmd = &self.commands.items[self.commands.items.len - 1];
-            const current_index: u32 = @intCast(self.indices.items.len);
+        if (self.command_count > 0) {
+            const cmd = &self.commands[self.command_count - 1];
+            const current_index: u32 = @intCast(self.index_count);
             cmd.elem_count = current_index - cmd.index_offset;
         }
     }
 
     pub fn addVertex(self: *DrawList, v: shapes.Vertex) !void {
         try self.ensureDrawCmd();
-        const idx: u32 = @intCast(self.vertices.items.len);
-        try self.vertices.append(self.allocator, v);
-        try self.indices.append(self.allocator, idx);
+        const idx: u32 = @intCast(self.vertex_count);
+
+        try self.ensureVertexCapacity(1);
+        self.vertices[self.vertex_count] = v;
+        self.vertex_count += 1;
+
+        try self.ensureIndexCapacity(1);
+        self.indices[self.index_count] = idx;
+        self.index_count += 1;
+
         self.updateCurrentCmd();
     }
 
@@ -94,12 +162,25 @@ pub const DrawList = struct {
         const v3 = shapes.Vertex{ .pos = .{ rect.x + rect.w, rect.y + rect.h }, .color = rgba };
         const v4 = shapes.Vertex{ .pos = .{ rect.x, rect.y + rect.h }, .color = rgba };
 
-        const base: u32 = @intCast(self.vertices.items.len);
-        try self.vertices.appendSlice(self.allocator, &[_]shapes.Vertex{ v1, v2, v3, v4 });
-        try self.indices.appendSlice(self.allocator, &[_]u32{
-            base, base + 1, base + 2,
-            base, base + 2, base + 3,
-        });
+        const base: u32 = @intCast(self.vertex_count);
+
+        try self.ensureVertexCapacity(4);
+        self.vertices[self.vertex_count] = v1;
+        self.vertices[self.vertex_count + 1] = v2;
+        self.vertices[self.vertex_count + 2] = v3;
+        self.vertices[self.vertex_count + 3] = v4;
+        self.vertex_count += 4;
+
+        try self.ensureIndexCapacity(6);
+        const idx_slice = self.indices[self.index_count..];
+        idx_slice[0] = base;
+        idx_slice[1] = base + 1;
+        idx_slice[2] = base + 2;
+        idx_slice[3] = base;
+        idx_slice[4] = base + 2;
+        idx_slice[5] = base + 3;
+        self.index_count += 6;
+
         self.updateCurrentCmd();
     }
 
@@ -128,16 +209,21 @@ pub const DrawList = struct {
             0.5 * pi, // Bottom-left: start at π/2 (pointing down)
         };
 
-        const base: u32 = @intCast(self.vertices.items.len);
+        const base: u32 = @intCast(self.vertex_count);
         const rgba = shapes.colorToRGBA(color);
 
         // Center vertex for triangle fan
         const center_x = rect.x + rect.w * 0.5;
         const center_y = rect.y + rect.h * 0.5;
-        try self.vertices.append(self.allocator, shapes.Vertex{
+
+        const vertex_count = 1 + 4 * (segments_per_corner + 1);
+        try self.ensureVertexCapacity(vertex_count);
+
+        self.vertices[self.vertex_count] = shapes.Vertex{
             .pos = .{ center_x, center_y },
             .color = rgba,
-        });
+        };
+        self.vertex_count += 1;
 
         // Generate vertices for each corner arc
         var i: usize = 0;
@@ -149,30 +235,31 @@ pub const DrawList = struct {
                 const x = corners[i][0] + @cos(angle) * r;
                 const y = corners[i][1] + @sin(angle) * r;
 
-                try self.vertices.append(self.allocator, shapes.Vertex{
+                self.vertices[self.vertex_count] = shapes.Vertex{
                     .pos = .{ x, y },
                     .color = rgba,
-                });
+                };
+                self.vertex_count += 1;
             }
         }
 
         // Generate indices for triangle fan
-        const vertex_count = 1 + 4 * (segments_per_corner + 1);
+        const index_count = (vertex_count - 1) * 3;
+        try self.ensureIndexCapacity(index_count);
+
         var idx: u32 = 1;
         while (idx < vertex_count - 1) : (idx += 1) {
-            try self.indices.appendSlice(self.allocator, &[_]u32{
-                base, // Center
-                base + idx, // Current vertex
-                base + idx + 1, // Next vertex
-            });
+            self.indices[self.index_count] = base;
+            self.indices[self.index_count + 1] = base + idx;
+            self.indices[self.index_count + 2] = base + idx + 1;
+            self.index_count += 3;
         }
 
         // Close the loop
-        try self.indices.appendSlice(self.allocator, &[_]u32{
-            base,
-            base + vertex_count - 1,
-            base + 1,
-        });
+        self.indices[self.index_count] = base;
+        self.indices[self.index_count + 1] = base + vertex_count - 1;
+        self.indices[self.index_count + 2] = base + 1;
+        self.index_count += 3;
 
         self.updateCurrentCmd();
     }
@@ -206,8 +293,12 @@ pub const DrawList = struct {
             0.5 * pi, // Bottom-left: start at π/2 (pointing down)
         };
 
-        const base: u32 = @intCast(self.vertices.items.len);
+        const base: u32 = @intCast(self.vertex_count);
         const rgba = shapes.colorToRGBA(color);
+
+        const vertices_per_corner = segments_per_corner + 1;
+        const total_vertices = 4 * vertices_per_corner * 2; // 2 vertices per point (outer + inner)
+        try self.ensureVertexCapacity(total_vertices);
 
         // Generate outer and inner vertices for each corner arc
         var i: usize = 0;
@@ -220,24 +311,27 @@ pub const DrawList = struct {
                 // Outer vertex
                 const outer_x = corners[i][0] + @cos(angle) * r;
                 const outer_y = corners[i][1] + @sin(angle) * r;
-                try self.vertices.append(self.allocator, shapes.Vertex{
+                self.vertices[self.vertex_count] = shapes.Vertex{
                     .pos = .{ outer_x, outer_y },
                     .color = rgba,
-                });
+                };
+                self.vertex_count += 1;
 
                 // Inner vertex
                 const inner_x = corners[i][0] + @cos(angle) * inner_radius;
                 const inner_y = corners[i][1] + @sin(angle) * inner_radius;
-                try self.vertices.append(self.allocator, shapes.Vertex{
+                self.vertices[self.vertex_count] = shapes.Vertex{
                     .pos = .{ inner_x, inner_y },
                     .color = rgba,
-                });
+                };
+                self.vertex_count += 1;
             }
         }
 
         // Generate indices to form triangles between outer and inner vertices
-        const vertices_per_corner = segments_per_corner + 1;
         const total_vertex_pairs = 4 * vertices_per_corner;
+        const total_indices = total_vertex_pairs * 6; // 2 triangles per quad
+        try self.ensureIndexCapacity(total_indices);
 
         var pair: u32 = 0;
         while (pair < total_vertex_pairs) : (pair += 1) {
@@ -249,12 +343,15 @@ pub const DrawList = struct {
             const inner_next = base + next_pair * 2 + 1;
 
             // Two triangles forming a quad between current and next pair
-            try self.indices.appendSlice(self.allocator, &[_]u32{
-                outer_curr, inner_curr, outer_next,
-            });
-            try self.indices.appendSlice(self.allocator, &[_]u32{
-                inner_curr, inner_next, outer_next,
-            });
+            self.indices[self.index_count] = outer_curr;
+            self.indices[self.index_count + 1] = inner_curr;
+            self.indices[self.index_count + 2] = outer_next;
+            self.index_count += 3;
+
+            self.indices[self.index_count] = inner_curr;
+            self.indices[self.index_count + 1] = inner_next;
+            self.indices[self.index_count + 2] = outer_next;
+            self.index_count += 3;
         }
 
         self.updateCurrentCmd();
@@ -279,20 +376,25 @@ pub const DrawList = struct {
         const v2 = uv_max[1];
 
         const rgba = shapes.colorToRGBA(color);
-        const vtx = [_]shapes.Vertex{
-            .{ .pos = .{ x1, y1 }, .uv = .{ uv1, v1 }, .color = rgba },
-            .{ .pos = .{ x2, y1 }, .uv = .{ uv2, v1 }, .color = rgba },
-            .{ .pos = .{ x2, y2 }, .uv = .{ uv2, v2 }, .color = rgba },
-            .{ .pos = .{ x1, y2 }, .uv = .{ uv1, v2 }, .color = rgba },
-        };
+        const base: u32 = @intCast(self.vertex_count);
 
-        const base: u32 = @intCast(self.vertices.items.len);
-        try self.vertices.appendSlice(self.allocator, &vtx);
+        try self.ensureVertexCapacity(4);
+        self.vertices[self.vertex_count] = .{ .pos = .{ x1, y1 }, .uv = .{ uv1, v1 }, .color = rgba };
+        self.vertices[self.vertex_count + 1] = .{ .pos = .{ x2, y1 }, .uv = .{ uv2, v1 }, .color = rgba };
+        self.vertices[self.vertex_count + 2] = .{ .pos = .{ x2, y2 }, .uv = .{ uv2, v2 }, .color = rgba };
+        self.vertices[self.vertex_count + 3] = .{ .pos = .{ x1, y2 }, .uv = .{ uv1, v2 }, .color = rgba };
+        self.vertex_count += 4;
 
-        try self.indices.appendSlice(self.allocator, &[_]u32{
-            base, base + 1, base + 2,
-            base, base + 2, base + 3,
-        });
+        try self.ensureIndexCapacity(6);
+        const idx_slice = self.indices[self.index_count..];
+        idx_slice[0] = base;
+        idx_slice[1] = base + 1;
+        idx_slice[2] = base + 2;
+        idx_slice[3] = base;
+        idx_slice[4] = base + 2;
+        idx_slice[5] = base + 3;
+        self.index_count += 6;
+
         self.updateCurrentCmd();
     }
 
@@ -346,20 +448,25 @@ pub const DrawList = struct {
         const uv2 = uv_max[0];
         const v2 = uv_max[1];
 
-        const vtx = [_]shapes.Vertex{
-            .{ .pos = .{ tl_x, tl_y }, .uv = .{ uv1, v1 }, .color = rgba },
-            .{ .pos = .{ tr_x, tr_y }, .uv = .{ uv2, v1 }, .color = rgba },
-            .{ .pos = .{ br_x, br_y }, .uv = .{ uv2, v2 }, .color = rgba },
-            .{ .pos = .{ bl_x, bl_y }, .uv = .{ uv1, v2 }, .color = rgba },
-        };
+        const base: u32 = @intCast(self.vertex_count);
 
-        const base: u32 = @intCast(self.vertices.items.len);
-        try self.vertices.appendSlice(self.allocator, &vtx);
+        try self.ensureVertexCapacity(4);
+        self.vertices[self.vertex_count] = .{ .pos = .{ tl_x, tl_y }, .uv = .{ uv1, v1 }, .color = rgba };
+        self.vertices[self.vertex_count + 1] = .{ .pos = .{ tr_x, tr_y }, .uv = .{ uv2, v1 }, .color = rgba };
+        self.vertices[self.vertex_count + 2] = .{ .pos = .{ br_x, br_y }, .uv = .{ uv2, v2 }, .color = rgba };
+        self.vertices[self.vertex_count + 3] = .{ .pos = .{ bl_x, bl_y }, .uv = .{ uv1, v2 }, .color = rgba };
+        self.vertex_count += 4;
 
-        try self.indices.appendSlice(self.allocator, &[_]u32{
-            base, base + 1, base + 2,
-            base, base + 2, base + 3,
-        });
+        try self.ensureIndexCapacity(6);
+        const idx_slice = self.indices[self.index_count..];
+        idx_slice[0] = base;
+        idx_slice[1] = base + 1;
+        idx_slice[2] = base + 2;
+        idx_slice[3] = base;
+        idx_slice[4] = base + 2;
+        idx_slice[5] = base + 3;
+        self.index_count += 6;
+
         self.updateCurrentCmd();
     }
 
@@ -380,11 +487,5 @@ pub const DrawList = struct {
 
             cursor_x += g.x_advance;
         }
-    }
-
-    pub fn deinit(self: *DrawList) void {
-        self.vertices.deinit(self.allocator);
-        self.indices.deinit(self.allocator);
-        self.commands.deinit(self.allocator);
     }
 };

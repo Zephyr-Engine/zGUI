@@ -41,7 +41,11 @@ pub const GLRenderer = struct {
         gl.glClear(gl.GL_COLOR_BUFFER_BIT);
 
         const dl = &ctx.draw_list;
-        if (dl.vertices.items.len == 0 or dl.commands.items.len == 0) {
+        const vertices = dl.getVertices();
+        const indices = dl.getIndices();
+        const commands = dl.getCommands();
+
+        if (vertices.len == 0 or commands.len == 0) {
             return;
         }
 
@@ -73,17 +77,17 @@ pub const GLRenderer = struct {
 
         gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo);
         checkGlError("glBindBuffer vbo render");
-        gl.glBufferData(gl.GL_ARRAY_BUFFER, @intCast(dl.vertices.items.len * @sizeOf(Vertex)), dl.vertices.items.ptr, gl.GL_DYNAMIC_DRAW);
+        gl.glBufferData(gl.GL_ARRAY_BUFFER, @intCast(vertices.len * @sizeOf(Vertex)), vertices.ptr, gl.GL_DYNAMIC_DRAW);
         checkGlError("glBufferData vbo");
 
         gl.glBindBuffer(gl.GL_ELEMENT_ARRAY_BUFFER, self.ibo);
         checkGlError("glBindBuffer ibo render");
-        gl.glBufferData(gl.GL_ELEMENT_ARRAY_BUFFER, @intCast(dl.indices.items.len * @sizeOf(u32)), dl.indices.items.ptr, gl.GL_DYNAMIC_DRAW);
+        gl.glBufferData(gl.GL_ELEMENT_ARRAY_BUFFER, @intCast(indices.len * @sizeOf(u32)), indices.ptr, gl.GL_DYNAMIC_DRAW);
         checkGlError("glBufferData ibo");
 
         gl.glActiveTexture(gl.GL_TEXTURE0);
 
-        for (dl.commands.items) |cmd| {
+        for (commands) |cmd| {
             if (cmd.elem_count == 0) continue;
 
             // Only bind texture if it's valid (non-zero)

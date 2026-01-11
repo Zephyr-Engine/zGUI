@@ -111,7 +111,11 @@ pub const GuiContext = struct {
 
     // Layout stack for managing nested layouts
     layout_stack: std.ArrayList(Layout),
-    allocator: std.mem.Allocator,
+
+    // Allocators: persistent for cross-frame data, frame for per-frame data
+    persistent_allocator: std.mem.Allocator,
+    frame_arena: std.heap.ArenaAllocator,
+    frame_allocator: std.mem.Allocator,
 
     // Global layout position tracking for automatic positioning
     next_layout_x: f32,
@@ -150,9 +154,18 @@ pub const GuiContext = struct {
             w.getContentScale(&content_scale_x, &content_scale_y);
         }
 
+        // Create frame arena allocator
+        var frame_arena = std.heap.ArenaAllocator.init(allocator);
+        const frame_allocator = frame_arena.allocator();
+
+        // Initialize DrawList with frame allocator - will be recreated each frame
+        const draw_list = try DrawList.init(frame_allocator);
+
         const ctx = GuiContext{
-            .allocator = allocator,
-            .draw_list = DrawList.init(allocator),
+            .persistent_allocator = allocator,
+            .frame_arena = frame_arena,
+            .frame_allocator = frame_allocator,
+            .draw_list = draw_list,
             .input = Input.init(),
             .font_cache = FontCache.init(allocator, "assets/RobotoMono-Regular.ttf", renderer),
             .current_font_texture = 0,
@@ -192,15 +205,24 @@ pub const GuiContext = struct {
 
     pub fn newFrame(self: *GuiContext) void {
         self.input.beginFrame();
-        self.draw_list.clear();
         self.layout_stack.clearRetainingCapacity();
         self.current_panel_id = null;
         self.next_layout_x = 0.0;
         self.next_layout_y = 0.0;
         self.click_consumed = false;
 
+        // Reset frame arena - this frees all per-frame allocations from the previous frame
+        // DrawList, temporary string buffers, etc. are all freed here
+        _ = self.frame_arena.reset(.retain_capacity);
+
+        // Get fresh allocator interface after reset
+        self.frame_allocator = self.frame_arena.allocator();
+
+        // Create fresh DrawList for this frame from the frame allocator
+        self.draw_list = DrawList.init(self.frame_allocator) catch unreachable;
+
         // root layout
-        self.layout_stack.append(self.allocator, Layout.init(Direction.HORIZONTAL, 0, 0, .{
+        self.layout_stack.append(self.persistent_allocator, Layout.init(Direction.HORIZONTAL, 0, 0, .{
             .height = self.window_height,
             .width = self.window_width,
         })) catch {};
@@ -359,10 +381,13 @@ pub const GuiContext = struct {
     }
 
     pub fn deinit(self: *GuiContext) void {
-        self.draw_list.deinit();
+        // DrawList cleanup is automatic via frame arena
         self.font_cache.deinit();
-        self.layout_stack.deinit(self.allocator);
+        self.layout_stack.deinit(self.persistent_allocator);
         self.panel_sizes.deinit();
+
+        // Deinit frame arena - this frees all frame-allocated memory including DrawList
+        self.frame_arena.deinit();
 
         // Clean up optional checkmark image
         if (self.checkmark_image) |*img| {

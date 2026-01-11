@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const build_options = @import("build_options");
 
 const btn = @import("gui/widgets/button.zig");
@@ -23,9 +24,14 @@ pub fn main() !void {
     try Window.init();
     defer Window.deinit();
 
+    // Use performant C allocator in release modes, GPA in debug for safety checks
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    defer {
+        if (builtin.mode == .Debug) {
+            _ = gpa.deinit();
+        }
+    }
+    const allocator = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
 
     // Create window manager
     var window_manager = WindowManager.init(allocator);

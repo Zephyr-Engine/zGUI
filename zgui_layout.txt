@@ -1,7 +1,7 @@
 multiwindow 1
 window 0 0 0 1920 1080 true
   split horizontal 0.819558
-    split horizontal 0.191491
+    split horizontal 0.204598
       tabgroup 0 10069612239895346261
       split vertical 0.657395
         tabgroup 0 13133716821201213471

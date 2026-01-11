@@ -90,7 +90,7 @@ pub const WindowManager = struct {
     pub fn createMainWindow(self: *WindowManager, width: i32, height: i32, title: [*c]const u8) !*WindowContext {
         const window = try Window.create(width, height, title);
         window.makeContextCurrent();
-        Window.setSwapInterval(1); // VSync
+        Window.setSwapInterval(0); // VSync
 
         // Create renderer
         const renderer = try self.allocator.create(Renderer);
