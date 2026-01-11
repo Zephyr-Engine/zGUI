@@ -50,7 +50,19 @@ pub fn framebufferSizeCallback(window_handle: c.Window, width: c_int, height: c_
     const gui_ptr = win.getUserPointer();
     if (gui_ptr != null) {
         const gui: *GuiContext = @ptrCast(@alignCast(gui_ptr));
-        gui.setWindowSize(@floatFromInt(width), @floatFromInt(height));
+        // Convert framebuffer size to logical window size using content scale
+        const logical_width = @as(f32, @floatFromInt(width)) / gui.content_scale_x;
+        const logical_height = @as(f32, @floatFromInt(height)) / gui.content_scale_y;
+        gui.setWindowSize(logical_width, logical_height);
+    }
+}
+
+pub fn contentScaleCallback(window_handle: c.Window, xscale: f32, yscale: f32) callconv(.c) void {
+    const win = Window{ .handle = window_handle.? };
+    const gui_ptr = win.getUserPointer();
+    if (gui_ptr != null) {
+        const gui: *GuiContext = @ptrCast(@alignCast(gui_ptr));
+        gui.handleContentScale(xscale, yscale);
     }
 }
 

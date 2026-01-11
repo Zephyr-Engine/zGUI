@@ -99,11 +99,13 @@ pub const WindowManager = struct {
         // Create GUI context
         var gui = try GuiContext.init(self.allocator, renderer, window);
 
-        // Set initial window size
+        // Set initial window size (in logical coordinates)
         var fb_width: i32 = 0;
         var fb_height: i32 = 0;
         window.getFramebufferSize(&fb_width, &fb_height);
-        gui.setWindowSize(@floatFromInt(fb_width), @floatFromInt(fb_height));
+        const logical_width = @as(f32, @floatFromInt(fb_width)) / gui.content_scale_x;
+        const logical_height = @as(f32, @floatFromInt(fb_height)) / gui.content_scale_y;
+        gui.setWindowSize(logical_width, logical_height);
 
         // Create docking context
         const dock_bounds = shapes.Rect{
@@ -153,6 +155,7 @@ pub const WindowManager = struct {
         window.setKeyCallback(input.keyCallback);
         window.setScrollCallback(input.scrollCallback);
         window.setFramebufferSizeCallback(input.framebufferSizeCallback);
+        window.setContentScaleCallback(input.contentScaleCallback);
 
         return ctx;
     }
@@ -176,11 +179,13 @@ pub const WindowManager = struct {
         // Create GuiContext
         var gui = try GuiContext.init(self.allocator, renderer, window);
 
-        // Set initial window size
+        // Set initial window size (in logical coordinates)
         var fb_width: i32 = 0;
         var fb_height: i32 = 0;
         window.getFramebufferSize(&fb_width, &fb_height);
-        gui.setWindowSize(@floatFromInt(fb_width), @floatFromInt(fb_height));
+        const logical_width = @as(f32, @floatFromInt(fb_width)) / gui.content_scale_x;
+        const logical_height = @as(f32, @floatFromInt(fb_height)) / gui.content_scale_y;
+        gui.setWindowSize(logical_width, logical_height);
 
         // Create docking context for this window
         const dock_bounds = shapes.Rect{
@@ -227,6 +232,7 @@ pub const WindowManager = struct {
         window.setKeyCallback(input.keyCallback);
         window.setScrollCallback(input.scrollCallback);
         window.setFramebufferSizeCallback(input.framebufferSizeCallback);
+        window.setContentScaleCallback(input.contentScaleCallback);
 
         return ctx;
     }

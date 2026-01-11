@@ -48,12 +48,18 @@ pub const GLRenderer = struct {
         gl.glUseProgram(self.shader);
         checkGlError("glUseProgram");
 
+        // Use framebuffer size for viewport (physical pixels for crisp rendering)
         gl.glViewport(0, 0, width, height);
         checkGlError("glViewport");
 
+        // Use logical coordinates for projection (divided by content scale)
+        // This ensures UI elements maintain consistent physical size across different DPI displays
+        const logical_width = @as(f32, @floatFromInt(width)) / ctx.content_scale_x;
+        const logical_height = @as(f32, @floatFromInt(height)) / ctx.content_scale_y;
+
         const loc = gl.glGetUniformLocation(self.shader, "u_projection");
         checkGlError("glGetUniformLocation");
-        var proj: [16]f32 = ortho(0, @floatFromInt(width), @floatFromInt(height), 0, -1, 1);
+        var proj: [16]f32 = ortho(0, logical_width, logical_height, 0, -1, 1);
         gl.glUniformMatrix4fv(loc, 1, gl.GL_FALSE, &proj);
         checkGlError("glUniformMatrix4fv");
 

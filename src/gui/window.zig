@@ -118,6 +118,14 @@ pub const Window = struct {
     pub fn getProcAddressFunction() *const fn ([*c]const u8) callconv(.c) ?*const fn () callconv(.c) void {
         return &glfw.glfwGetProcAddress;
     }
+
+    pub fn getContentScale(self: Window, xscale: *f32, yscale: *f32) void {
+        glfw.glfwGetWindowContentScale(self.handle, xscale, yscale);
+    }
+
+    pub fn setContentScaleCallback(self: Window, callback: ContentScaleCallbackFn) void {
+        _ = glfw.glfwSetWindowContentScaleCallback(self.handle, callback);
+    }
 };
 
 // Cursor management
@@ -153,6 +161,7 @@ pub const CharCallbackFn = *const fn (?*glfw.GLFWwindow, c_uint) callconv(.c) vo
 pub const KeyCallbackFn = *const fn (?*glfw.GLFWwindow, c_int, c_int, c_int, c_int) callconv(.c) void;
 pub const ScrollCallbackFn = *const fn (?*glfw.GLFWwindow, f64, f64) callconv(.c) void;
 pub const FramebufferSizeCallbackFn = *const fn (?*glfw.GLFWwindow, c_int, c_int) callconv(.c) void;
+pub const ContentScaleCallbackFn = *const fn (?*glfw.GLFWwindow, f32, f32) callconv(.c) void;
 
 // Input constants
 pub const Key = enum(c_int) {

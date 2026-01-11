@@ -123,6 +123,10 @@ pub const GuiContext = struct {
     is_resizing: bool,
     last_resize_time: f64,
 
+    // DPI scaling - content scale for high-DPI displays
+    content_scale_x: f32,
+    content_scale_y: f32,
+
     // Cursor management
     arrow_cursor: ?*Cursor,
     hand_cursor: ?*Cursor,
@@ -138,6 +142,13 @@ pub const GuiContext = struct {
         const hresize_cursor = if (win) |_| window.createStandardCursor(.hresize) else null;
         const vresize_cursor = if (win) |_| window.createStandardCursor(.vresize) else null;
         const ibeam_cursor = if (win) |_| window.createStandardCursor(.ibeam) else null;
+
+        // Get initial content scale
+        var content_scale_x: f32 = 1.0;
+        var content_scale_y: f32 = 1.0;
+        if (win) |w| {
+            w.getContentScale(&content_scale_x, &content_scale_y);
+        }
 
         const ctx = GuiContext{
             .allocator = allocator,
@@ -167,6 +178,8 @@ pub const GuiContext = struct {
             .next_layout_y = 0.0,
             .is_resizing = false,
             .last_resize_time = 0.0,
+            .content_scale_x = content_scale_x,
+            .content_scale_y = content_scale_y,
             .arrow_cursor = arrow_cursor,
             .hand_cursor = hand_cursor,
             .hresize_cursor = hresize_cursor,
@@ -397,5 +410,14 @@ pub const GuiContext = struct {
 
     pub fn setTheme(self: *GuiContext, new_theme: *const Theme) void {
         self.theme = new_theme;
+    }
+
+    pub fn updateContentScale(self: *GuiContext, xscale: f32, yscale: f32) void {
+        self.content_scale_x = xscale;
+        self.content_scale_y = yscale;
+    }
+
+    pub fn handleContentScale(self: *GuiContext, xscale: f32, yscale: f32) void {
+        self.updateContentScale(xscale, yscale);
     }
 };
