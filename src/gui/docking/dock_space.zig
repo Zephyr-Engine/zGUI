@@ -23,7 +23,7 @@ pub const DockSpace = struct {
 
     /// Add a panel to the dock space
     /// If root is null, creates a tab group as root
-    /// Otherwise, appends to root if it's a tab group
+    /// Otherwise, appends to root if it's a tab group, or finds first tab group in tree
     pub fn addPanel(self: *DockSpace, panel_id: u64) !void {
         if (self.root == null) {
             // Create root tab group
@@ -34,9 +34,15 @@ pub const DockSpace = struct {
                 try group.panel_ids.append(self.allocator, panel_id);
             }
         } else {
-            // Root is a split, can't add directly
-            // For now, this is not supported - panels should be added via docking
-            return error.CannotAddToSplit;
+            // Root is a split - find the first tab group leaf node
+            if (findFirstTabGroup(self.root.?)) |tab_group_node| {
+                if (tab_group_node.tab_group) |*group| {
+                    try group.panel_ids.append(self.allocator, panel_id);
+                }
+            } else {
+                // No tab groups exist - this shouldn't happen in a valid tree
+                return error.NoTabGroupFound;
+            }
         }
     }
 
@@ -113,6 +119,26 @@ fn updateLayoutRecursive(node: *DockNode, bounds: shapes.Rect) void {
                     },
                 }
             }
+        },
+    }
+}
+
+/// Find the first tab group node in the tree (depth-first search)
+fn findFirstTabGroup(node: *DockNode) ?*DockNode {
+    switch (node.node_type) {
+        .tab_group => return node,
+        .split => {
+            if (node.split) |split_info| {
+                // Search left subtree first
+                if (findFirstTabGroup(split_info.first)) |found| {
+                    return found;
+                }
+                // Then search right subtree
+                if (findFirstTabGroup(split_info.second)) |found| {
+                    return found;
+                }
+            }
+            return null;
         },
     }
 }

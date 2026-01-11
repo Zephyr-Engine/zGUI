@@ -191,3 +191,202 @@ pub fn loadLayoutFromFile(allocator: std.mem.Allocator, file_path: []const u8) !
 
     return try deserializeLayout(allocator, data);
 }
+
+// ===== Multi-Window Persistence =====
+
+pub const MultiWindowLayout = struct {
+    windows: []WindowLayoutData,
+};
+
+pub const WindowLayoutData = struct {
+    window_id: u64,
+    is_main: bool,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    dock_tree: ?*DockNode,
+};
+
+/// Save multi-window layout to file
+pub fn saveMultiWindowLayout(
+    allocator: std.mem.Allocator,
+    manager: *anyopaque, // WindowManager pointer
+    file_path: []const u8,
+) !void {
+    const WindowManager = @import("../window_manager.zig").WindowManager;
+    const window_manager: *WindowManager = @ptrCast(@alignCast(manager));
+
+    var buffer = try std.ArrayList(u8).initCapacity(allocator, 1024);
+    defer buffer.deinit(allocator);
+
+    const header = try std.fmt.allocPrint(allocator, "multiwindow {d}\n", .{window_manager.windows.count()});
+    defer allocator.free(header);
+    try buffer.appendSlice(allocator, header);
+
+    // Serialize each window
+    var iter = window_manager.windows.iterator();
+    while (iter.next()) |entry| {
+        const window_ctx = entry.value_ptr.*;
+
+        // Window metadata line
+        const meta = try std.fmt.allocPrint(
+            allocator,
+            "window {d} {d} {d} {d} {d} {}\n",
+            .{
+                window_ctx.id,
+                window_ctx.metadata.x,
+                window_ctx.metadata.y,
+                window_ctx.metadata.width,
+                window_ctx.metadata.height,
+                window_ctx.metadata.is_main,
+            },
+        );
+        defer allocator.free(meta);
+        try buffer.appendSlice(allocator, meta);
+
+        // Serialize dock tree (indented)
+        if (window_ctx.docking_ctx.dock_space.root) |root| {
+            const tree_data = try serializeLayout(allocator, root);
+            defer allocator.free(tree_data);
+
+            var tree_iter = std.mem.splitScalar(u8, tree_data, '\n');
+            while (tree_iter.next()) |line| {
+                if (line.len > 0) {
+                    try buffer.appendSlice(allocator, "  ");
+                    try buffer.appendSlice(allocator, line);
+                    try buffer.append(allocator, '\n');
+                }
+            }
+        }
+        try buffer.appendSlice(allocator, "endwindow\n");
+    }
+
+    // Write to file
+    const file = try std.fs.cwd().createFile(file_path, .{});
+    defer file.close();
+    try file.writeAll(buffer.items);
+}
+
+/// Load multi-window layout from file
+pub fn loadMultiWindowLayout(
+    allocator: std.mem.Allocator,
+    file_path: []const u8,
+) !?MultiWindowLayout {
+    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+        if (err == error.FileNotFound) return null;
+        return err;
+    };
+    defer file.close();
+
+    const data = try file.readToEndAlloc(allocator, 1024 * 1024);
+    defer allocator.free(data);
+
+    // Parse header
+    var windows = try std.ArrayList(WindowLayoutData).initCapacity(allocator, 4);
+    errdefer {
+        for (windows.items) |*w| {
+            if (w.dock_tree) |tree| tree.deinit();
+        }
+        windows.deinit(allocator);
+    }
+
+    var lines = std.mem.splitScalar(u8, data, '\n');
+    const header = lines.next() orelse return error.InvalidFormat;
+    if (!std.mem.startsWith(u8, header, "multiwindow")) return error.InvalidFormat;
+
+    // Collect all lines first
+    var all_lines = try std.ArrayList([]const u8).initCapacity(allocator, 16);
+    defer all_lines.deinit(allocator);
+
+    while (lines.next()) |line| {
+        if (line.len > 0) {
+            try all_lines.append(allocator, line);
+        }
+    }
+
+    // Parse each window block
+    var index: usize = 0;
+    while (index < all_lines.items.len) {
+        const line = all_lines.items[index];
+        const trimmed = std.mem.trim(u8, line, " ");
+
+        if (std.mem.startsWith(u8, trimmed, "window")) {
+            const window_data = try parseWindowBlock(allocator, all_lines.items, &index);
+            try windows.append(allocator, window_data);
+        } else {
+            index += 1;
+        }
+    }
+
+    return MultiWindowLayout{
+        .windows = try windows.toOwnedSlice(allocator),
+    };
+}
+
+/// Parse a single window block
+fn parseWindowBlock(
+    allocator: std.mem.Allocator,
+    lines: [][]const u8,
+    index: *usize,
+) !WindowLayoutData {
+    const window_line = lines[index.*];
+    index.* += 1;
+
+    // Parse: "window <id> <x> <y> <width> <height> <is_main>"
+    var parts = std.mem.splitScalar(u8, window_line, ' ');
+    _ = parts.next(); // Skip "window"
+
+    const id = try std.fmt.parseInt(u64, parts.next() orelse return error.InvalidFormat, 10);
+    const x = try std.fmt.parseInt(i32, parts.next() orelse return error.InvalidFormat, 10);
+    const y = try std.fmt.parseInt(i32, parts.next() orelse return error.InvalidFormat, 10);
+    const width = try std.fmt.parseInt(i32, parts.next() orelse return error.InvalidFormat, 10);
+    const height = try std.fmt.parseInt(i32, parts.next() orelse return error.InvalidFormat, 10);
+    const is_main_str = parts.next() orelse return error.InvalidFormat;
+    const is_main = std.mem.eql(u8, is_main_str, "true");
+
+    // Collect indented tree lines
+    var tree_lines = try std.ArrayList([]const u8).initCapacity(allocator, 16);
+    defer tree_lines.deinit(allocator);
+
+    while (index.* < lines.len) {
+        const line = lines[index.*];
+        if (std.mem.startsWith(u8, line, "endwindow")) {
+            index.* += 1;
+            break;
+        }
+
+        // Remove 2-space indent
+        const unindented = if (std.mem.startsWith(u8, line, "  "))
+            line[2..]
+        else
+            line;
+
+        try tree_lines.append(allocator, unindented);
+        index.* += 1;
+    }
+
+    // Reconstruct tree data and deserialize
+    var tree_data = try std.ArrayList(u8).initCapacity(allocator, 256);
+    defer tree_data.deinit(allocator);
+
+    for (tree_lines.items) |line| {
+        try tree_data.appendSlice(allocator, line);
+        try tree_data.append(allocator, '\n');
+    }
+
+    const dock_tree = if (tree_data.items.len > 0)
+        try deserializeLayout(allocator, tree_data.items)
+    else
+        null;
+
+    return WindowLayoutData{
+        .window_id = id,
+        .is_main = is_main,
+        .x = x,
+        .y = y,
+        .width = width,
+        .height = height,
+        .dock_tree = dock_tree,
+    };
+}

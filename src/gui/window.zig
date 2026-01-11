@@ -12,7 +12,11 @@ pub const Window = struct {
     }
 
     pub fn deinit() void {
-        glfw.glfwTerminate();
+        // BUG: glfwTerminate causes crash on Wayland when windows are destroyed during runtime
+        // GLFW's internal Wayland state gets corrupted when individual windows are destroyed,
+        // leading to segfault in wl_display_disconnect during glfwTerminate.
+        // The OS cleans up all resources on process exit anyway, so skipping this is safe.
+        // glfw.glfwTerminate();
     }
 
     pub fn create(width: i32, height: i32, title: [*c]const u8) !Window {

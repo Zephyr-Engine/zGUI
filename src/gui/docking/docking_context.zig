@@ -38,31 +38,41 @@ pub const DockingContext = struct {
     dock_space: DockSpace,
     drag_state: DragState,
     splitter_drag: ?SplitterDragState = null,
-    panel_registry: std.AutoHashMap(u64, PanelInfo),
+    panel_registry: *std.AutoHashMap(u64, PanelInfo),
     allocator: std.mem.Allocator,
+    window_id: u64 = 0,
+    window_manager: ?*anyopaque = null, // Pointer to WindowManager (avoid circular dependency)
+    owns_panel_registry: bool = false, // Track if we should deinit panel_registry
 
     pub fn init(allocator: std.mem.Allocator, bounds: shapes.Rect) !DockingContext {
+        const panel_registry = try allocator.create(std.AutoHashMap(u64, PanelInfo));
+        panel_registry.* = std.AutoHashMap(u64, PanelInfo).init(allocator);
+
         return .{
             .allocator = allocator,
             .dock_space = DockSpace.init(allocator, bounds),
             .drag_state = DragState.init(),
-            .panel_registry = std.AutoHashMap(u64, PanelInfo).init(allocator),
+            .panel_registry = panel_registry,
+            .owns_panel_registry = true,
         };
     }
 
     pub fn deinit(self: *DockingContext) void {
         self.dock_space.deinit();
-        self.panel_registry.deinit();
+        if (self.owns_panel_registry) {
+            self.panel_registry.deinit();
+            self.allocator.destroy(self.panel_registry);
+        }
     }
 
     /// Register a panel with the docking system
     pub fn registerPanel(self: *DockingContext, panel: PanelInfo) !void {
-        try self.panel_registry.put(panel.id, panel);
+        try self.panel_registry.*.put(panel.id, panel);
     }
 
     /// Unregister a panel
     pub fn unregisterPanel(self: *DockingContext, panel_id: u64) void {
-        _ = self.panel_registry.remove(panel_id);
+        _ = self.panel_registry.*.remove(panel_id);
     }
 
     /// Add a panel to the dock space
@@ -133,6 +143,30 @@ pub const DockingContext = struct {
         _ = self;
         // Will be used in later steps
     }
+
+    /// Check if current drag position is outside the window bounds
+    pub fn isDragOutsideWindow(self: *DockingContext, ctx: *GuiContext) bool {
+        if (!self.drag_state.dragging) return false;
+
+        const mouse_x = @as(f32, @floatCast(ctx.input.cursor_x));
+        const mouse_y = @as(f32, @floatCast(ctx.input.cursor_y));
+        const bounds = self.dock_space.bounds;
+        const threshold = 50.0; // Prevent accidental window creation
+
+        return mouse_x < (bounds.x - threshold) or
+            mouse_x > (bounds.x + bounds.w + threshold) or
+            mouse_y < (bounds.y - threshold) or
+            mouse_y > (bounds.y + bounds.h + threshold);
+    }
+
+    /// Get the cached rect of the panel being dragged (for sizing new window)
+    pub fn getDraggedPanelRect(self: *DockingContext) ?shapes.Rect {
+        if (!self.drag_state.dragging) return null;
+        if (self.drag_state.source_node) |source| {
+            return source.cached_rect;
+        }
+        return null;
+    }
 };
 
 /// Recursively render a dock node and its children
@@ -194,7 +228,7 @@ fn renderTabGroup(
     const tab_padding = 2.0;
 
     for (group.panel_ids.items, 0..) |panel_id, i| {
-        const panel_info = docking_ctx.panel_registry.get(panel_id) orelse continue;
+        const panel_info = docking_ctx.panel_registry.*.get(panel_id) orelse continue;
 
         const is_active = (i == group.active_index);
 
@@ -257,7 +291,7 @@ fn renderTabGroup(
     // Render active panel content
     if (group.panel_ids.items.len > 0) {
         const active_panel_id = group.panel_ids.items[group.active_index];
-        if (docking_ctx.panel_registry.get(active_panel_id)) |panel_info| {
+        if (docking_ctx.panel_registry.*.get(active_panel_id)) |panel_info| {
             // Call user's render function
             try panel_info.render_fn(ctx, content_bounds);
         }
@@ -351,7 +385,12 @@ fn renderSplitter(
 fn updateDragState(docking_ctx: *DockingContext, ctx: *GuiContext) !void {
     // If dragging and mouse released, handle drop
     if (docking_ctx.drag_state.dragging and !ctx.input.mouse_left_pressed) {
-        try handleDrop(docking_ctx);
+        // Check if dropped outside window
+        if (docking_ctx.isDragOutsideWindow(ctx)) {
+            try handleDragOutsideWindow(docking_ctx, ctx);
+        } else {
+            try handleDrop(docking_ctx);
+        }
         docking_ctx.drag_state.reset();
         return;
     }
@@ -387,10 +426,38 @@ fn updateDragState(docking_ctx: *DockingContext, ctx: *GuiContext) !void {
     }
 }
 
+/// Handle drag ending outside window bounds - creates new window
+fn handleDragOutsideWindow(docking_ctx: *DockingContext, ctx: *GuiContext) !void {
+    // Import WindowManager dynamically to avoid circular dependency
+    const WindowManager = @import("../window_manager.zig").WindowManager;
+    const window_manager: *WindowManager = @ptrCast(@alignCast(docking_ctx.window_manager orelse return));
+
+    const panel_id = docking_ctx.drag_state.panel_id;
+
+    // Get panel size for new window
+    const panel_rect = docking_ctx.getDraggedPanelRect() orelse
+        shapes.Rect{ .x = 0, .y = 0, .w = 800, .h = 600 };
+
+    // Calculate position near cursor
+    const mouse_x: i32 = @intFromFloat(ctx.input.cursor_x);
+    const mouse_y: i32 = @intFromFloat(ctx.input.cursor_y);
+    const width: i32 = @intFromFloat(@max(panel_rect.w, 400));
+    const height: i32 = @intFromFloat(@max(panel_rect.h, 300));
+
+    // Create new window and transfer panel
+    const new_window = try window_manager.createChildWindow(
+        width,
+        height,
+        mouse_x - 200,
+        mouse_y - 150,
+    );
+    try window_manager.transferPanel(panel_id, docking_ctx.window_id, new_window.id);
+}
+
 /// Render preview of dragged panel
 fn renderDraggedPanelPreview(docking_ctx: *DockingContext, ctx: *GuiContext) !void {
     // Get panel info
-    if (docking_ctx.panel_registry.get(docking_ctx.drag_state.panel_id)) |panel_info| {
+    if (docking_ctx.panel_registry.*.get(docking_ctx.drag_state.panel_id)) |panel_info| {
         const mouse_x = @as(f32, @floatCast(ctx.input.cursor_x));
         const mouse_y = @as(f32, @floatCast(ctx.input.cursor_y));
 

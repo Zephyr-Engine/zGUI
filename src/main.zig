@@ -17,37 +17,63 @@ const window_mod = @import("gui/window.zig");
 const Window = window_mod.Window;
 const DockingContext = @import("gui/docking/docking_context.zig").DockingContext;
 const PanelInfo = @import("gui/docking/panel_info.zig").PanelInfo;
+const WindowManager = @import("gui/window_manager.zig").WindowManager;
 
 pub fn main() !void {
     try Window.init();
     defer Window.deinit();
 
-    const window = try Window.create(1920, 1080, "zGUI - Docking Demo");
-    defer window.destroy();
-
-    window.makeContextCurrent();
-    Window.setSwapInterval(1); // VSYNC
-
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var renderer = try opengl.createRenderer(allocator, Window);
-    defer renderer.deinit();
+    // Create window manager
+    var window_manager = WindowManager.init(allocator);
+    defer window_manager.deinit();
 
-    var gui = try GuiContext.init(allocator, &renderer, window);
-    defer gui.deinit();
+    // Register all panels with centralized registry
+    try window_manager.registerPanel(PanelInfo{
+        .id = utils.id("scene"),
+        .title = "Scene",
+        .render_fn = renderScenePanel,
+        .closable = false,
+        .min_width = 300,
+        .min_height = 300,
+    });
+
+    try window_manager.registerPanel(PanelInfo{
+        .id = utils.id("hierarchy"),
+        .title = "Hierarchy",
+        .render_fn = renderHierarchyPanel,
+        .closable = true,
+        .min_width = 200,
+        .min_height = 200,
+    });
+
+    try window_manager.registerPanel(PanelInfo{
+        .id = utils.id("inspector"),
+        .title = "Inspector",
+        .render_fn = renderInspectorPanel,
+        .closable = true,
+        .min_width = 250,
+        .min_height = 200,
+    });
+
+    try window_manager.registerPanel(PanelInfo{
+        .id = utils.id("console"),
+        .title = "Console",
+        .render_fn = renderConsolePanel,
+        .closable = true,
+        .min_width = 200,
+        .min_height = 100,
+    });
+
+    // Create main window
+    const main_ctx = try window_manager.createMainWindow(1920, 1080, "zGUI - Docking Demo");
 
     // Load checkmark image for checkbox widget
-    const checkmark_img = try imageWidget.Image.load(allocator, &renderer, "assets/checkmark.png");
-    gui.checkmark_image = checkmark_img;
-
-    window.setUserPointer(&gui);
-    window.setMouseButtonCallback(input.mouseButtonCallback);
-    window.setCharCallback(input.charCallback);
-    window.setKeyCallback(input.keyCallback);
-    window.setScrollCallback(input.scrollCallback);
-    window.setFramebufferSizeCallback(input.framebufferSizeCallback);
+    const checkmark_img = try imageWidget.Image.load(allocator, main_ctx.renderer, "assets/checkmark.png");
+    main_ctx.gui.checkmark_image = checkmark_img;
 
     var debug_stats = if (comptime build_options.debug) DebugStats.init() else {};
     defer {
@@ -57,150 +83,129 @@ pub fn main() !void {
     }
     var stats_buffer: [128]u8 = undefined;
 
-    var fb_width: i32 = 0;
-    var fb_height: i32 = 0;
-    window.getFramebufferSize(&fb_width, &fb_height);
-    gui.setWindowSize(@floatFromInt(fb_width), @floatFromInt(fb_height));
-
     const file_options = [_][]const u8{ "New", "Open", "Save", "Save As", "Exit" };
     const menu_options = [_][]const u8{ "Preferences", "Settings", "About" };
     const top_panel_height: f32 = 50;
 
-    // Create docking context
-    const dock_bounds = shapes.Rect{
-        .x = 0,
-        .y = top_panel_height,
-        .w = gui.window_width,
-        .h = gui.window_height - top_panel_height,
-    };
-    var docking_ctx = try DockingContext.init(allocator, dock_bounds);
-    defer docking_ctx.deinit();
-
-    // Register panels
-    try docking_ctx.registerPanel(PanelInfo{
-        .id = utils.id("scene"),
-        .title = "Scene",
-        .render_fn = renderScenePanel,
-        .closable = false,
-        .min_width = 300,
-        .min_height = 300,
-    });
-
-    try docking_ctx.registerPanel(PanelInfo{
-        .id = utils.id("hierarchy"),
-        .title = "Hierarchy",
-        .render_fn = renderHierarchyPanel,
-        .closable = true,
-        .min_width = 200,
-        .min_height = 200,
-    });
-
-    try docking_ctx.registerPanel(PanelInfo{
-        .id = utils.id("inspector"),
-        .title = "Inspector",
-        .render_fn = renderInspectorPanel,
-        .closable = true,
-        .min_width = 250,
-        .min_height = 200,
-    });
-
-    try docking_ctx.registerPanel(PanelInfo{
-        .id = utils.id("console"),
-        .title = "Console",
-        .render_fn = renderConsolePanel,
-        .closable = true,
-        .min_width = 200,
-        .min_height = 100,
-    });
-
-    // Try to load saved layout, or use default layout
+    // Try to load multi-window layout
     const layout_file = "zgui_layout.txt";
-    const layout_loaded = try docking_ctx.loadLayout(layout_file);
+    const layout_loaded = try window_manager.loadLayout(layout_file);
 
     if (!layout_loaded) {
-        // No saved layout - add panels to docking system (they'll all start in one tab group)
-        try docking_ctx.addPanel(utils.id("scene"));
-        try docking_ctx.addPanel(utils.id("hierarchy"));
-        try docking_ctx.addPanel(utils.id("inspector"));
-        try docking_ctx.addPanel(utils.id("console"));
+        // No saved layout - add all panels to main window
+        try main_ctx.docking_ctx.addPanel(utils.id("scene"));
+        try main_ctx.docking_ctx.addPanel(utils.id("hierarchy"));
+        try main_ctx.docking_ctx.addPanel(utils.id("inspector"));
+        try main_ctx.docking_ctx.addPanel(utils.id("console"));
     }
 
-    while (!window.shouldClose()) {
+    // Main event loop - poll ALL windows
+    while (!main_ctx.window.shouldClose()) {
         if (comptime build_options.debug) {
             debug_stats.beginFrame(window_mod.getTime());
         }
 
-        gui.newFrame();
-        Window.pollEvents();
-        gui.updateInput(window);
-        if (gui.is_resizing) {
-            continue;
+        Window.pollEvents(); // Global event poll
+
+        // Render each window
+        var iter = window_manager.windows.iterator();
+        while (iter.next()) |entry| {
+            const window_ctx = entry.value_ptr.*;
+
+            // Check if window should close
+            if (window_ctx.window.shouldClose() and !window_ctx.metadata.is_main) {
+                window_ctx.is_closing = true;
+                continue;
+            }
+
+            // Make context current for this window
+            window_ctx.window.makeContextCurrent();
+
+            // Update GUI
+            window_ctx.gui.newFrame();
+            window_ctx.gui.updateInput(window_ctx.window);
+
+            if (window_ctx.gui.is_resizing) continue;
+
+            // Update dock bounds (for main window, leave space for menu; for child windows, use full window)
+            const panel_y = if (window_ctx.metadata.is_main) top_panel_height else 0;
+            const panel_h = if (window_ctx.metadata.is_main) window_ctx.gui.window_height - top_panel_height else window_ctx.gui.window_height;
+
+            window_ctx.docking_ctx.dock_space.bounds = shapes.Rect{
+                .x = 0,
+                .y = panel_y,
+                .w = window_ctx.gui.window_width,
+                .h = panel_h,
+            };
+
+            // Render top menu bar (main window only)
+            if (window_ctx.metadata.is_main) {
+                const menu_bar_rect = shapes.Rect{
+                    .x = 0,
+                    .y = 0,
+                    .w = window_ctx.gui.window_width,
+                    .h = top_panel_height,
+                };
+                try window_ctx.gui.draw_list.addRect(menu_bar_rect, window_ctx.gui.theme.bg_secondary);
+
+                layout.beginLayout(&window_ctx.gui, layout.hLayout(&window_ctx.gui, .{
+                    .margin = layout.Spacing.all(10),
+                    .padding = layout.Spacing.all(12),
+                    .height = top_panel_height,
+                }));
+
+                if (try dropdown.dropdown(&window_ctx.gui, 1, "File", &file_options, .{
+                    .font_size = 16,
+                    .padding = layout.Spacing.symmetric(6, 12),
+                    .border_radius = 4.0,
+                })) |index| {
+                    std.debug.print("File option selected: {s}\n", .{file_options[index]});
+                }
+
+                if (try dropdown.dropdown(&window_ctx.gui, 2, "Menu", &menu_options, .{
+                    .font_size = 16,
+                    .padding = layout.Spacing.symmetric(6, 12),
+                    .border_radius = 4.0,
+                })) |index| {
+                    std.debug.print("Menu option selected: {s}\n", .{menu_options[index]});
+                }
+
+                layout.endLayout(&window_ctx.gui);
+            }
+
+            // Render docking system
+            try window_ctx.docking_ctx.render(&window_ctx.gui);
+
+            // Debug stats (main window only)
+            if (comptime build_options.debug and window_ctx.metadata.is_main) {
+                const stats_text = try debug_stats.format(&stats_buffer);
+                const stats_metrics = try window_ctx.gui.measureText(stats_text, 20);
+                const stats_x = window_ctx.gui.window_width - stats_metrics.width - 10;
+                const stats_y = 10;
+                try window_ctx.gui.addText(stats_x, stats_y, stats_text, 20, 0xFFFFFFFF);
+            }
+
+            // Render frame
+            var fb_width: i32 = 0;
+            var fb_height: i32 = 0;
+            window_ctx.window.getFramebufferSize(&fb_width, &fb_height);
+            window_ctx.gui.render(window_ctx.renderer, fb_width, fb_height);
+            window_ctx.window.swapBuffers();
         }
-
-        // Update dock bounds if window resized
-        docking_ctx.dock_space.bounds = shapes.Rect{
-            .x = 0,
-            .y = top_panel_height,
-            .w = gui.window_width,
-            .h = gui.window_height - top_panel_height,
-        };
-
-        // Render top menu bar (outside dock space)
-        // Draw background for menu bar
-        const menu_bar_rect = shapes.Rect{
-            .x = 0,
-            .y = 0,
-            .w = gui.window_width,
-            .h = top_panel_height,
-        };
-        try gui.draw_list.addRect(menu_bar_rect, gui.theme.bg_secondary);
-
-        layout.beginLayout(&gui, layout.hLayout(&gui, .{
-            .margin = layout.Spacing.all(10),
-            .padding = layout.Spacing.all(12),
-            .height = top_panel_height,
-        }));
-
-        if (try dropdown.dropdown(&gui, 1, "File", &file_options, .{
-            .font_size = 16,
-            .padding = layout.Spacing.symmetric(6, 12),
-            .border_radius = 4.0,
-        })) |index| {
-            std.debug.print("File option selected: {s}\n", .{file_options[index]});
-        }
-
-        if (try dropdown.dropdown(&gui, 2, "Menu", &menu_options, .{
-            .font_size = 16,
-            .padding = layout.Spacing.symmetric(6, 12),
-            .border_radius = 4.0,
-        })) |index| {
-            std.debug.print("Menu option selected: {s}\n", .{menu_options[index]});
-        }
-
-        layout.endLayout(&gui);
-
-        // Render docked panels
-        try docking_ctx.render(&gui);
-
-        if (comptime build_options.debug) {
-            const stats_text = try debug_stats.format(&stats_buffer);
-            const stats_metrics = try gui.measureText(stats_text, 20);
-            const stats_x = gui.window_width - stats_metrics.width - 10;
-            const stats_y = 10;
-            try gui.addText(stats_x, stats_y, stats_text, 20, 0xFFFFFFFF);
-        }
-
-        gui.render(&renderer, @intFromFloat(gui.window_width), @intFromFloat(gui.window_height));
 
         if (comptime build_options.debug) {
             debug_stats.endFrame();
         }
 
-        window.swapBuffers();
+        // Handle cross-window operations
+        try window_manager.updateAllWindows();
+
+        // Close any child windows marked for closing
+        try window_manager.closeMarkedWindows();
     }
 
-    // Save layout before exit
-    try docking_ctx.saveLayout(layout_file);
+    // Save multi-window layout
+    try window_manager.saveLayout(layout_file);
 
     // Process any remaining events
     Window.pollEvents();
