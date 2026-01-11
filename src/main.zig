@@ -177,12 +177,14 @@ pub fn main() !void {
             try window_ctx.docking_ctx.render(&window_ctx.gui);
 
             // Debug stats (main window only)
-            if (comptime build_options.debug and window_ctx.metadata.is_main) {
-                const stats_text = try debug_stats.format(&stats_buffer);
-                const stats_metrics = try window_ctx.gui.measureText(stats_text, 20);
-                const stats_x = window_ctx.gui.window_width - stats_metrics.width - 10;
-                const stats_y = 10;
-                try window_ctx.gui.addText(stats_x, stats_y, stats_text, 20, 0xFFFFFFFF);
+            if (comptime build_options.debug) {
+                if (window_ctx.metadata.is_main) {
+                    const stats_text = try debug_stats.format(&stats_buffer);
+                    const stats_metrics = try window_ctx.gui.measureText(stats_text, 20);
+                    const stats_x = window_ctx.gui.window_width - stats_metrics.width - 10;
+                    const stats_y = 10;
+                    try window_ctx.gui.addText(stats_x, stats_y, stats_text, 20, 0xFFFFFFFF);
+                }
             }
 
             // Render frame
