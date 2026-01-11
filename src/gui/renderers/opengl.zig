@@ -14,6 +14,8 @@ pub const GLRenderer = struct {
     ibo: u32,
     vao: u32,
     allocator: std.mem.Allocator,
+    proj_loc: i32,
+    tex_loc: i32,
 
     pub fn init(allocator: std.mem.Allocator) GLRenderer {
         var self = GLRenderer{
@@ -21,6 +23,8 @@ pub const GLRenderer = struct {
             .vbo = 0,
             .ibo = 0,
             .vao = 0,
+            .proj_loc = 0,
+            .tex_loc = 0,
             .allocator = allocator,
         };
 
@@ -61,14 +65,11 @@ pub const GLRenderer = struct {
         const logical_width = @as(f32, @floatFromInt(width)) / ctx.content_scale_x;
         const logical_height = @as(f32, @floatFromInt(height)) / ctx.content_scale_y;
 
-        const loc = gl.glGetUniformLocation(self.shader, "u_projection");
-        checkGlError("glGetUniformLocation");
         var proj: [16]f32 = ortho(0, logical_width, logical_height, 0, -1, 1);
-        gl.glUniformMatrix4fv(loc, 1, gl.GL_FALSE, &proj);
+        gl.glUniformMatrix4fv(self.proj_loc, 1, gl.GL_FALSE, &proj);
         checkGlError("glUniformMatrix4fv");
 
-        const tex_loc = gl.glGetUniformLocation(self.shader, "uTexture");
-        gl.glUniform1i(tex_loc, 0);
+        gl.glUniform1i(self.tex_loc, 0);
         checkGlError("glUniform1i");
 
         // Bind VAO first, then upload vertex and index data
@@ -136,6 +137,12 @@ fn setupBuffers(r: *GLRenderer) void {
     checkGlError("glEnableVertexAttribArray 2");
     gl.glVertexAttribPointer(2, 4, gl.GL_UNSIGNED_BYTE, gl.GL_TRUE, stride, @ptrFromInt(16));
     checkGlError("glVertexAttribPointer 2");
+
+    r.*.proj_loc = gl.glGetUniformLocation(r.shader, "u_projection");
+    checkGlError("glGetUniformLocation");
+
+    r.*.tex_loc = gl.glGetUniformLocation(r.shader, "uTexture");
+    checkGlError("glGetUniformLocation");
 }
 
 fn createShader() u32 {
