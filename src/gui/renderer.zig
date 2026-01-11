@@ -49,6 +49,16 @@ pub const Renderer = struct {
     ///   - texture: Texture handle to delete
     delete_texture_fn: *const fn (context: *anyopaque, texture: TextureHandle) void,
 
+    /// Wrap an existing texture ID (e.g., from a framebuffer)
+    /// Parameters:
+    ///   - context: Renderer-specific data
+    ///   - texture_id: Native texture ID (e.g., OpenGL texture ID)
+    ///   - width: Texture width in pixels
+    ///   - height: Texture height in pixels
+    /// Returns: Opaque texture handle
+    /// Note: The texture is NOT owned by the renderer and will not be deleted
+    wrap_texture_fn: *const fn (context: *anyopaque, texture_id: u32, width: i32, height: i32) TextureHandle,
+
     /// Clean up renderer resources
     /// Called when the renderer is being destroyed
     deinit_fn: *const fn (context: *anyopaque) void,
@@ -60,6 +70,7 @@ pub const Renderer = struct {
         render_fn: *const fn (*anyopaque, *GuiContext, i32, i32) void,
         create_texture_fn: *const fn (*anyopaque, i32, i32, TextureFormat, [*]const u8) TextureHandle,
         delete_texture_fn: *const fn (*anyopaque, TextureHandle) void,
+        wrap_texture_fn: *const fn (*anyopaque, u32, i32, i32) TextureHandle,
         deinit_fn: *const fn (*anyopaque) void,
     ) Renderer {
         return Renderer{
@@ -68,6 +79,7 @@ pub const Renderer = struct {
             .render_fn = render_fn,
             .create_texture_fn = create_texture_fn,
             .delete_texture_fn = delete_texture_fn,
+            .wrap_texture_fn = wrap_texture_fn,
             .deinit_fn = deinit_fn,
         };
     }
@@ -85,6 +97,12 @@ pub const Renderer = struct {
     /// Delete a texture
     pub fn deleteTexture(self: *Renderer, texture: TextureHandle) void {
         self.delete_texture_fn(self.context, texture);
+    }
+
+    /// Wrap an existing texture ID (e.g., from a framebuffer)
+    /// Note: The wrapped texture is NOT owned by the renderer and will not be deleted
+    pub fn wrapTexture(self: *Renderer, texture_id: u32, width: i32, height: i32) TextureHandle {
+        return self.wrap_texture_fn(self.context, texture_id, width, height);
     }
 
     /// Call the renderer's cleanup function

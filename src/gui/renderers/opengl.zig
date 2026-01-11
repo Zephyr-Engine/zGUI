@@ -345,6 +345,15 @@ fn rendererDeleteTexture(context: *anyopaque, texture: TextureHandle) void {
     gl.glDeleteTextures(1, &tex);
 }
 
+fn rendererWrapTexture(context: *anyopaque, texture_id: u32, width: i32, height: i32) TextureHandle {
+    _ = context;
+    _ = width;
+    _ = height;
+    // Simply return the texture ID as a TextureHandle
+    // The texture is NOT owned by the renderer and will not be deleted
+    return @intCast(texture_id);
+}
+
 fn rendererDeinit(context: *anyopaque) void {
     const self: *GLRenderer = @ptrCast(@alignCast(context));
     const allocator = self.allocator;
@@ -377,6 +386,7 @@ pub fn createRenderer(allocator: std.mem.Allocator, window: anytype) !Renderer {
         rendererRender,
         rendererCreateTexture,
         rendererDeleteTexture,
+        rendererWrapTexture,
         rendererDeinit,
     );
 }
