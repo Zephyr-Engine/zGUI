@@ -1,0 +1,12 @@
+.{
+    .name = .docking_demo,
+    .version = "0.0.1",
+    .dependencies = .{
+        .zgui = .{
+            .path = "../..",
+        },
+    },
+    .minimum_zig_version = "0.15.2",
+    .paths = .{ "build.zig", "build.zig.zon", "main.zig", "assets" },
+    .fingerprint = 0x3bd2b8803025cb9a,
+}

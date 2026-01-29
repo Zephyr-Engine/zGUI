@@ -444,7 +444,8 @@ fn inputInternal(
 
     const padding = 8.0;
     const text_x = rect.x + padding;
-    const text_y = rect.y + (rect.h - opts.font_size) * 0.5;
+    const font_metrics = try ctx.measureText("Ag", opts.font_size);
+    const text_y = rect.y + (rect.h - font_metrics.height) * 0.5;
     const available_width = rect.w - (padding * 2.0);
 
     if (buffer_len.* > 0) {

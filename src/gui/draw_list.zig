@@ -471,21 +471,33 @@ pub const DrawList = struct {
     }
 
     pub fn addText(self: *DrawList, font: *const Font, x: f32, y: f32, text: []const u8, color: shapes.Color) !void {
-        var cursor_x = x;
-        const cursor_y = y + font.ascent;
+        try self.addTextScaled(font, x, y, text, color, 1.0);
+    }
+
+    /// Render text with content scale compensation.
+    /// When fonts are rasterized at physical_size = logical_size * scale,
+    /// glyph metrics must be divided by scale to produce logical coordinates.
+    pub fn addTextScaled(self: *DrawList, font: *const Font, x: f32, y: f32, text: []const u8, color: shapes.Color, scale: f32) !void {
+        const inv_scale = 1.0 / scale;
+
+        // Pixel-snap the text origin so all text at the same logical Y
+        // lands on the same pixel row. Glyph offsets are kept fractional
+        // to preserve relative positioning within the string.
+        var cursor_x = @round(x);
+        const cursor_y = @round(y + font.ascent * inv_scale);
 
         for (text) |c| {
             const glyph_index: usize = @intCast(c);
             const g = font.glyphs[glyph_index];
 
-            const gx0 = cursor_x + g.x_off;
-            const gy0 = cursor_y + g.y_off;
-            const gx1 = gx0 + (@as(f32, @floatFromInt(g.x1 - g.x0)));
-            const gy1 = gy0 + (@as(f32, @floatFromInt(g.y1 - g.y0)));
+            const gx0 = cursor_x + g.x_off * inv_scale;
+            const gy0 = cursor_y + g.y_off * inv_scale;
+            const gw = @as(f32, @floatFromInt(g.x1 - g.x0)) * inv_scale;
+            const gh = @as(f32, @floatFromInt(g.y1 - g.y0)) * inv_scale;
 
-            try self.addRectUV(.{ .x = gx0, .y = gy0, .w = gx1 - gx0, .h = gy1 - gy0 }, g.uv0, g.uv1, color);
+            try self.addRectUV(.{ .x = gx0, .y = gy0, .w = gw, .h = gh }, g.uv0, g.uv1, color);
 
-            cursor_x += g.x_advance;
+            cursor_x += g.x_advance * inv_scale;
         }
     }
 };

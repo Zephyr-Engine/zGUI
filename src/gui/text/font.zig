@@ -37,6 +37,11 @@ pub const Font = struct {
     line_gap: f32,
     glyphs: [256]Glyph,
 
+    /// Load font from in-memory data (e.g., @embedFile)
+    pub fn loadFromMemory(allocator: std.mem.Allocator, renderer: *Renderer, font_data: []const u8, pixel_height: f32) !Font {
+        return loadFromData(allocator, renderer, font_data, pixel_height);
+    }
+
     pub fn load(allocator: std.mem.Allocator, renderer: *Renderer, path: []const u8, pixel_height: f32) !Font {
         var file = try std.fs.cwd().openFile(path, .{});
         defer file.close();
@@ -44,6 +49,10 @@ pub const Font = struct {
         const data = try file.readToEndAlloc(allocator, 4 * 1024 * 1024);
         defer allocator.free(data);
 
+        return loadFromData(allocator, renderer, data, pixel_height);
+    }
+
+    fn loadFromData(allocator: std.mem.Allocator, renderer: *Renderer, data: []const u8, pixel_height: f32) !Font {
         var info: stb.stbtt_fontinfo = undefined;
         if (stb.stbtt_InitFont(&info, data.ptr, 0) == 0) {
             return LoadError.InvalidFont;

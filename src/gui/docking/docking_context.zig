@@ -246,7 +246,7 @@ fn renderTabGroup(
         // Tab text
         const text_metrics = try ctx.measureText(panel_info.title, tab_font_size);
         const text_x = tab_x + (tab_width - text_metrics.width) * 0.5;
-        const text_y = bounds.y + (tab_bar_height - tab_font_size) * 0.5;
+        const text_y = bounds.y + (tab_bar_height - text_metrics.height) * 0.5;
         try ctx.addText(text_x, text_y, panel_info.title, tab_font_size, ctx.theme.text_primary);
 
         // Handle tab interaction (click to activate, drag to move)
@@ -478,7 +478,7 @@ fn renderDraggedPanelPreview(docking_ctx: *DockingContext, ctx: *GuiContext) !vo
         // Text
         const text_metrics = try ctx.measureText(panel_info.title, 14.0);
         const text_x = mouse_x - text_metrics.width * 0.5;
-        const text_y = mouse_y - 14.0 * 0.5;
+        const text_y = mouse_y - text_metrics.height * 0.5;
         try ctx.addText(text_x, text_y, panel_info.title, 14.0, ctx.theme.text_primary);
     }
 }

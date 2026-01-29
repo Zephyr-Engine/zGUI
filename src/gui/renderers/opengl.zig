@@ -16,8 +16,17 @@ pub const GLRenderer = struct {
     allocator: std.mem.Allocator,
     proj_loc: i32,
     tex_loc: i32,
+    embedded_mode: bool,
 
     pub fn init(allocator: std.mem.Allocator) GLRenderer {
+        return initWithOptions(allocator, false);
+    }
+
+    pub fn initEmbedded(allocator: std.mem.Allocator) GLRenderer {
+        return initWithOptions(allocator, true);
+    }
+
+    fn initWithOptions(allocator: std.mem.Allocator, embedded: bool) GLRenderer {
         var self = GLRenderer{
             .shader = 0,
             .vbo = 0,
@@ -26,6 +35,7 @@ pub const GLRenderer = struct {
             .proj_loc = 0,
             .tex_loc = 0,
             .allocator = allocator,
+            .embedded_mode = embedded,
         };
 
         self.shader = createShader();
@@ -41,9 +51,6 @@ pub const GLRenderer = struct {
     }
 
     pub fn render(self: *GLRenderer, ctx: *GuiContext, width: i32, height: i32) void {
-        // Clear the screen
-        gl.glClear(gl.GL_COLOR_BUFFER_BIT);
-
         const dl = &ctx.draw_list;
         const vertices = dl.getVertices();
         const indices = dl.getIndices();
@@ -51,6 +58,23 @@ pub const GLRenderer = struct {
 
         if (vertices.len == 0 or commands.len == 0) {
             return;
+        }
+
+        // In embedded mode, save current GL state
+        var prev_blend: i32 = undefined;
+        var prev_depth_test: i32 = undefined;
+        var prev_multisample: i32 = undefined;
+        if (self.embedded_mode) {
+            gl.glGetIntegerv(gl.GL_BLEND, &prev_blend);
+            gl.glGetIntegerv(gl.GL_DEPTH_TEST, &prev_depth_test);
+            gl.glGetIntegerv(gl.GL_MULTISAMPLE, &prev_multisample);
+            gl.glEnable(gl.GL_BLEND);
+            gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA);
+            gl.glDisable(gl.GL_DEPTH_TEST);
+            gl.glDisable(gl.GL_MULTISAMPLE);
+        } else {
+            // Clear the screen (standalone mode only)
+            gl.glClear(gl.GL_COLOR_BUFFER_BIT);
         }
 
         gl.glUseProgram(self.shader);
@@ -102,6 +126,13 @@ pub const GLRenderer = struct {
             const offset_ptr: ?*const anyopaque = @ptrFromInt(cmd.index_offset * @sizeOf(u32));
             gl.glDrawElements(gl.GL_TRIANGLES, @intCast(cmd.elem_count), gl.GL_UNSIGNED_INT, offset_ptr);
             checkGlError("glDrawElements");
+        }
+
+        // In embedded mode, restore previous GL state
+        if (self.embedded_mode) {
+            if (prev_blend == 0) gl.glDisable(gl.GL_BLEND);
+            if (prev_depth_test != 0) gl.glEnable(gl.GL_DEPTH_TEST);
+            if (prev_multisample != 0) gl.glEnable(gl.GL_MULTISAMPLE);
         }
     }
 };
@@ -390,6 +421,28 @@ pub fn createRenderer(allocator: std.mem.Allocator, window: anytype) !Renderer {
 
     const gl_renderer = try allocator.create(GLRenderer);
     gl_renderer.* = GLRenderer.init(allocator);
+
+    return Renderer.init(
+        gl_renderer,
+        rendererInit,
+        rendererRender,
+        rendererCreateTexture,
+        rendererDeleteTexture,
+        rendererWrapTexture,
+        rendererDeinit,
+    );
+}
+
+/// Create a renderer interface for embedded mode
+/// Use this when OpenGL is already loaded by another system (e.g., a game engine)
+/// The renderer will save/restore GL state and won't clear the screen
+pub fn createEmbeddedRenderer(allocator: std.mem.Allocator) !Renderer {
+    // Set up OpenGL state for GUI rendering
+    gl.glEnable(gl.GL_BLEND);
+    gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA);
+
+    const gl_renderer = try allocator.create(GLRenderer);
+    gl_renderer.* = GLRenderer.initEmbedded(allocator);
 
     return Renderer.init(
         gl_renderer,

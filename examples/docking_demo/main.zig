@@ -1,24 +1,26 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 
-const btn = @import("gui/widgets/button.zig");
-const textInput = @import("gui/widgets/input.zig");
-const imageWidget = @import("gui/widgets/image.zig");
-const dropdown = @import("gui/widgets/dropdown.zig");
-const collapsible = @import("gui/widgets/collapsible.zig");
-const utils = @import("gui/widgets/utils.zig");
-const layout = @import("gui/layout.zig");
-const opengl = @import("gui/renderers/opengl.zig");
-const GuiContext = @import("gui/context.zig").GuiContext;
-const shapes = @import("gui/shapes.zig");
-const input = @import("gui/input.zig");
-const DebugStats = @import("gui/debug_stats.zig").DebugStats;
-const window_mod = @import("gui/window.zig");
-const Window = window_mod.Window;
-const DockingContext = @import("gui/docking/docking_context.zig").DockingContext;
-const PanelInfo = @import("gui/docking/panel_info.zig").PanelInfo;
-const WindowManager = @import("gui/window_manager.zig").WindowManager;
+const zgui = @import("zgui");
+const build_options = zgui.build_options;
+
+const btn = zgui.button;
+const textInput = zgui.textInput;
+const imageWidget = zgui.image;
+const dropdown = zgui.dropdown;
+const collapsible = zgui.collapsible;
+const utils = zgui.utils;
+const layout = zgui.layout;
+const opengl = zgui.opengl;
+const GuiContext = zgui.GuiContext;
+const shapes = zgui.shapes;
+const input = zgui.input;
+const DebugStats = zgui.DebugStats;
+const window_mod = zgui.window;
+const Window = zgui.Window;
+const DockingContext = zgui.docking.DockingContext;
+const PanelInfo = zgui.docking.PanelInfo;
+const WindowManager = zgui.WindowManager;
 
 pub fn main() !void {
     try Window.init();

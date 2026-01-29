@@ -2,15 +2,16 @@
 
 ## Project Overview
 
-**zGUI** is an immediate-mode GUI library written in Zig, featuring OpenGL-based rendering with text support via stb_truetype. The project is in active development, currently supporting interactive buttons with click detection, multi-size text rendering, and rounded corners.
+**zGUI** is an immediate-mode GUI library written in Zig, featuring OpenGL-based rendering with text support via stb_truetype. The project is structured as a reusable library that can be integrated into Zig applications via the module system.
 
 ### Key Facts
 
 - **Language**: Zig (minimum version 0.15.2)
 - **Build System**: Zig build system (build.zig)
 - **Graphics**: OpenGL 3.3 Core Profile
-- **Dependencies**: GLFW (windowing), GLAD (OpenGL loader), stb_truetype (font rendering)
-- **Current State**: Phase 1 (v0.2) - Interactive widgets with full keyboard/mouse input (~80% complete)
+- **Dependencies**: GLFW (windowing), GLAD (OpenGL loader), stb_truetype (font rendering), stb_image (image loading)
+- **Distribution**: Static library (libzgui.a) with module export
+- **Current State**: Phase 1 (v0.2) - Interactive widgets with full keyboard/mouse input, docking system (~80% complete)
 - **Roadmap**: See [roadmap.md](roadmap.md) for the full development plan
 
 ## Repository Structure
@@ -18,32 +19,58 @@
 ```
 zGUI/
 ├── src/
-│   ├── main.zig                    # Application entry point
+│   ├── zgui.zig                    # Library entry point (public API)
 │   └── gui/
-│       ├── c.zig                   # C library bindings (GLFW, GLAD, stb_truetype)
+│       ├── c.zig                   # C library bindings (GLFW, GLAD, stb_truetype, stb_image)
 │       ├── context.zig             # GuiContext - main GUI state container
 │       ├── draw_list.zig           # DrawList - vertex/index buffer management
 │       ├── input.zig               # Input handling (mouse clicks, hover detection)
 │       ├── shapes.zig              # Shape primitives (Vertex, Rect, Color)
+│       ├── color.zig               # Color utilities
+│       ├── theme.zig               # Theme system
+│       ├── layout.zig              # Layout system
+│       ├── window.zig              # Window abstraction
+│       ├── window_manager.zig      # Multi-window management
+│       ├── debug_stats.zig         # Debug statistics
 │       ├── renderers/
 │       │   └── opengl.zig          # OpenGL renderer implementation
 │       ├── widgets/
 │       │   ├── button.zig          # Button widget with click detection
 │       │   ├── checkbox.zig        # Checkbox widget with toggle
-│       │   └── input.zig           # Text input widget with full editing support
+│       │   ├── input.zig           # Text input widget with full editing support
+│       │   ├── dropdown.zig        # Dropdown menu widget
+│       │   ├── collapsible.zig     # Collapsible section widget
+│       │   ├── image.zig           # Image widget
+│       │   ├── panel.zig           # Panel widget
+│       │   └── utils.zig           # Widget utilities
+│       ├── docking/
+│       │   ├── docking_context.zig # Docking system manager
+│       │   ├── panel_info.zig      # Panel metadata
+│       │   ├── dock_node.zig       # Dock tree nodes
+│       │   └── drop_zone.zig       # Drop zone detection
 │       └── text/
 │           ├── font.zig            # Font loading and text measurement
 │           ├── font_cache.zig      # Multi-size font caching system
 │           └── RobotoMono-Regular.ttf  # Default font
 ├── external/
-│   └── font/
-│       ├── stb_truetype.c          # stb_truetype implementation
-│       └── stb_truetype.h          # stb_truetype header
-├── build.zig                       # Build configuration
-├── build.zig.zon                   # Dependency management
+│   ├── font/
+│   │   ├── stb_truetype.c          # stb_truetype implementation
+│   │   └── stb_truetype.h          # stb_truetype header
+│   └── image/
+│       ├── stb_image.c             # stb_image implementation
+│       └── stb_image.h             # stb_image header
+├── examples/
+│   ├── README.md                   # Examples documentation
+│   └── docking_demo/               # Docking system demonstration
+│       ├── main.zig                # Demo application
+│       ├── build.zig               # Demo build configuration
+│       ├── build.zig.zon           # Demo dependencies
+│       └── assets/                 # Demo assets
+├── build.zig                       # Library build configuration
+├── build.zig.zon                   # Library dependency management
 ├── roadmap.md                      # Development roadmap (v0.1 → v1.0+)
 ├── CLAUDE.md                       # This file
-└── README.md
+└── README.md                       # Library documentation
 
 ```
 
@@ -197,11 +224,16 @@ Main Loop:
 ### Build Commands
 
 ```bash
-# Build the project
+# Build the library
 zig build
 
-# Build and run
+# Build and run the docking demo example
+cd examples/docking_demo
 zig build run
+
+# Build with debug features enabled
+cd examples/docking_demo
+zig build run -Ddebug=true
 
 # Clean build cache
 rm -rf .zig-cache zig-out
@@ -209,10 +241,82 @@ rm -rf .zig-cache zig-out
 
 ### Build Configuration Highlights
 
-- Executable name: `zgui`
-- Entry point: `src/main.zig`
-- C source: `external/font/stb_truetype.c` compiled with `-O3`
-- Include path: `external/font/` for stb_truetype.h
+- **Library output**: `libzgui.a` (static library)
+- **Library entry point**: `src/zgui.zig`
+- **Module export**: `zgui` module for consumption by other projects
+- **C sources**:
+  - `external/font/stb_truetype.c` compiled with `-O3`
+  - `external/image/stb_image.c` compiled with `-O3`
+- **Include paths**:
+  - `external/font/` for stb_truetype.h
+  - `external/image/` for stb_image.h
+
+### Using zGUI as a Dependency
+
+To use zGUI in your project, add it to your `build.zig.zon`:
+
+```zig
+.{
+    .name = .your_project,
+    .version = "0.0.1",
+    .dependencies = .{
+        .zgui = .{
+            .path = "path/to/zGUI",
+        },
+    },
+    .minimum_zig_version = "0.15.2",
+}
+```
+
+Then in your `build.zig`:
+
+```zig
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+    const debug = b.option(bool, "debug", "Enable debug features") orelse false;
+
+    const zgui_dep = b.dependency("zgui", .{
+        .target = target,
+        .optimize = optimize,
+        .debug = debug,
+    });
+
+    const exe = b.addExecutable(.{
+        .name = "your_app",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    // Create build options
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "debug", debug);
+
+    // Import zGUI module and provide build_options to it
+    const zgui_module = zgui_dep.module("zgui");
+    zgui_module.addOptions("build_options", build_options);
+    exe.root_module.addImport("zgui", zgui_module);
+
+    b.installArtifact(exe);
+}
+```
+
+In your source code:
+
+```zig
+const zgui = @import("zgui");
+
+// Access components
+const Window = zgui.Window;
+const GuiContext = zgui.GuiContext;
+const button = zgui.button;
+const build_options = zgui.build_options;
+```
 
 ## Development Workflows
 
@@ -229,7 +333,8 @@ rm -rf .zig-cache zig-out
    - Add geometry to `ctx.draw_list`
    - Return `true` if interacted with, `false` otherwise
    - Handle layout internally or accept positioned rect
-4. Import in `main.zig` and use in the main loop
+4. Export in `src/zgui.zig` for public access
+5. Use in your application code
 
 **Example pattern (button widget):**
 
@@ -262,6 +367,10 @@ pub fn button(ctx: *GuiContext, rect: shapes.Rect, label: []const u8, opts: Butt
    - Word-wise navigation (Ctrl/Alt + arrows)
    - Horizontal scrolling for long text
    - Platform-aware keyboard shortcuts
+4. **Dropdown** (`widgets/dropdown.zig`) - Dropdown menu with option selection
+5. **Collapsible** (`widgets/collapsible.zig`) - Collapsible section widget
+6. **Image** (`widgets/image.zig`) - Image display widget with texture support
+7. **Panel** (`widgets/panel.zig`) - Container panel widget
 
 ### Adding a New Renderer
 
@@ -347,6 +456,31 @@ if (ctx.input.primary_pressed and ctx.input.isKeyJustPressed(glfw.GLFW_KEY_S)) {
 
 ### Import Patterns
 
+**For library consumers (application code):**
+
+```zig
+// Standard library
+const std = @import("std");
+
+// Import zGUI library
+const zgui = @import("zgui");
+
+// Access components
+const Window = zgui.Window;
+const GuiContext = zgui.GuiContext;
+const button = zgui.button;
+const layout = zgui.layout;
+const shapes = zgui.shapes;
+const build_options = zgui.build_options;
+
+// Direct access to C bindings if needed
+const c = zgui.c;
+const glfw = c.glfw;
+const gl = c.glad;
+```
+
+**For internal library development:**
+
 ```zig
 // Standard library
 const std = @import("std");
@@ -356,7 +490,7 @@ const c = @import("c.zig");
 const glfw = c.glfw;
 const gl = c.glad;
 
-// Internal modules
+// Internal modules (relative imports within library)
 const GuiContext = @import("context.zig").GuiContext;
 const shapes = @import("shapes.zig");
 ```
@@ -419,18 +553,25 @@ pub const Vertex = struct {
 - [x] Multi-size font caching
 - [x] Multi-texture batching
 
-### Missing Features (Phase 2+)
+### Completed Features (Phase 2)
+
+- [x] Layout system
+- [x] Window/panel system with docking
+- [x] Multi-window support via WindowManager
+- [x] Theme system
+- [x] Additional widgets (dropdown, collapsible, image, panel)
+
+### Missing Features (Phase 3+)
 
 - [ ] Right/middle mouse button support
 - [ ] Mouse scroll/wheel input
-- [ ] Additional widgets (radio button, slider, dropdown, etc.)
-- [ ] Layout system (currently manual positioning)
-- [ ] Window/panel system
+- [ ] Additional widgets (radio button, slider, color picker, etc.)
 - [ ] Clipping/scissor rectangles
-- [ ] Themes/styling system
 - [ ] Multi-font support (different font families)
 - [ ] Unicode support (currently ASCII only)
-- [ ] Z-ordering/depth
+- [ ] Z-ordering/depth improvements
+- [ ] Widget state serialization/deserialization
+- [ ] Accessibility features
 
 ### Renderer Limitations
 
@@ -441,13 +582,25 @@ pub const Vertex = struct {
 
 ## Testing & Debugging
 
-### Running the Application
+### Running the Examples
+
+**Docking Demo:**
 
 ```bash
+cd examples/docking_demo
 zig build run
 ```
 
-Expected output: A 1920x1080 window with a button labeled "hello world" at position (30, 30).
+Expected output: A 1920x1080 window with multiple dockable panels (Scene, Hierarchy, Inspector, Console) and a menu bar.
+
+**Debug Mode:**
+
+```bash
+cd examples/docking_demo
+zig build run -Ddebug=true
+```
+
+This enables FPS counter and other debug statistics in the top-right corner.
 
 ### OpenGL Debugging
 
@@ -472,34 +625,44 @@ The renderer includes comprehensive error checking via `checkGlError()` calls af
    }
    ```
 
-2. Update `build.zig`:
+2. Update the library's `build.zig`:
 
    ```zig
    const dep = b.dependency("package_name", .{
        .target = target,
        .optimize = optimize,
    });
-   exe.root_module.linkLibrary(dep.artifact("artifact_name"));
+   lib.root_module.linkLibrary(dep.artifact("artifact_name"));
+   zgui_module.linkLibrary(dep.artifact("artifact_name")); // Also add to exported module
    ```
 
-3. Run `zig build` - Zig will compute the hash if missing
+3. Export the dependency in `src/zgui.zig` if consumers need direct access:
+
+   ```zig
+   pub const new_dep = @import("new_dependency");
+   ```
+
+4. Run `zig build` - Zig will compute the hash if missing
 
 ## Recent Development Activity
 
 Based on git history (most recent first):
 
+- **Library Conversion** (2025-01-25) - Converted project to library structure:
+  - Created `src/zgui.zig` as public API entry point
+  - Updated build system to produce `libzgui.a`
+  - Moved demo application to `examples/docking_demo/`
+  - Added comprehensive integration documentation
+- `0c1163a` - Store uniform locations
+- `36c4f71` - Performance improvements with arena allocator
+- `df3b4f2` - Bug fix
+- `987d38b` - Allow images to render framebuffers
+- `61852ad` - Proper scaling across different DPI monitors
 - `8ebc964` - Copy/paste support for text input widget
 - `598d01f` - WIP input widget development
 - `0ab800f` - Modifier keys + text selection in input widget
-- `c6371f5` - Code simplification
-- `cca3cb8` - Basic input component implementation
-- `ec56cde` - Text rendering fully working
-- `a95857f` - Progress on text rendering
-- `aff2d11` - Shader fixes
-- `a3422aa` - Started font rendering implementation
-- `2672f3c` - OpenGL rendering infrastructure
 
-**Development pattern**: Incremental feature development. Foundation (rendering, fonts) completed in Phase 1. Currently finishing Phase 1 (interactive widgets) with comprehensive text input support. Next focus: Phase 2 layout system.
+**Development pattern**: Incremental feature development. Foundation (rendering, fonts, input) completed in Phase 1. Phase 2 (layout, docking, multi-window) largely complete. Library structure now established for public consumption.
 
 ## AI Assistant Guidelines
 
@@ -515,9 +678,10 @@ Based on git history (most recent first):
 
 **Adding a shape primitive:**
 
-1. Add method to `DrawList` (draw_list.zig)
+1. Add method to `DrawList` (src/gui/draw_list.zig)
 2. Follow pattern of `addRect` - create vertices, append to buffers
-3. Test in main loop
+3. Test in an example application
+4. Consider exposing in `src/zgui.zig` if it's part of the public API
 
 **Modifying rendering:**
 
@@ -528,9 +692,11 @@ Based on git history (most recent first):
 
 **Adding input support:**
 
-1. Add state to `GuiContext`
-2. Update `input.updateInput()` to poll GLFW
-3. Use in widget functions
+1. Add state to `Input` struct (src/gui/input.zig)
+2. Update `Input.update()` to poll GLFW or add new callbacks
+3. Expose in `GuiContext` if needed
+4. Use in widget functions
+5. Document in examples
 
 ### Performance Considerations
 
@@ -567,6 +733,34 @@ As the library grows, consider:
 
 ---
 
-**Last Updated**: 2025-11-22
-**Project Status**: Phase 1 (~80% Complete) - Interactive widgets functional
+**Last Updated**: 2025-01-25
+**Project Status**: Phase 2 Complete - Library structure established, docking system functional
 **Maintainer**: jackparsonss
+
+## Library Architecture Notes
+
+### Public API Surface
+
+The `src/zgui.zig` file defines the entire public API of the library. When adding new features:
+
+1. **Internal implementation** goes in `src/gui/`
+2. **Public exports** are added to `src/zgui.zig`
+3. **Examples** in `examples/` demonstrate usage
+
+### Build Options
+
+The library uses a special pattern for `build_options`:
+
+- The library re-exports `build_options` through `zgui.build_options`
+- Consuming projects must provide `build_options` to the zgui module via `addOptions()`
+- This allows the library to access debug flags without conflicts
+
+### Module Dependencies
+
+The library transitively provides:
+- GLFW (windowing)
+- GLAD (OpenGL)
+- stb_truetype (font rendering)
+- stb_image (image loading)
+
+Consumers don't need to separately link these dependencies.

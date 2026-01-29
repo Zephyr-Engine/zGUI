@@ -200,6 +200,25 @@ pub const Input = struct {
         }
     }
 
+    /// Finalize per-frame input state after external event injection.
+    /// In embedded mode, events are injected after beginFrame() clears state.
+    /// This re-transfers accumulated click counts to clicked flags and
+    /// should be called after all events for the current frame have been injected.
+    pub fn finalizeInjectedInput(self: *Input) void {
+        if (self.mouse_left_click_count > 0) {
+            self.mouse_left_clicked = true;
+            self.mouse_left_click_count = 0;
+        }
+        if (self.mouse_right_click_count > 0) {
+            self.mouse_right_clicked = true;
+            self.mouse_right_click_count = 0;
+        }
+        if (self.mouse_middle_click_count > 0) {
+            self.mouse_middle_clicked = true;
+            self.mouse_middle_click_count = 0;
+        }
+    }
+
     pub fn isKeyJustPressed(self: *const Input, key: c_int) bool {
         if (key >= 0 and key < 512) {
             const key_idx: usize = @intCast(key);

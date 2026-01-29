@@ -87,7 +87,8 @@ pub fn collapsibleSection(
     }
 
     const text_x = chevron_x + opts.chevron_size + opts.padding;
-    const text_y = header_rect.y + (opts.header_height - opts.font_size) * 0.5;
+    const label_metrics = try ctx.measureText(label, opts.font_size);
+    const text_y = header_rect.y + (opts.header_height - label_metrics.height) * 0.5;
     try ctx.addText(text_x, text_y, label, opts.font_size, text_color);
 
     if (is_open.*) {

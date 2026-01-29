@@ -5,6 +5,7 @@ const Renderer = @import("../renderer.zig").Renderer;
 pub const FontCache = struct {
     allocator: std.mem.Allocator,
     font_path: []const u8,
+    font_data: ?[]const u8,
     renderer: *Renderer,
     cache: std.AutoHashMap(u32, Font),
 
@@ -12,6 +13,18 @@ pub const FontCache = struct {
         return FontCache{
             .allocator = allocator,
             .font_path = font_path,
+            .font_data = null,
+            .renderer = renderer,
+            .cache = std.AutoHashMap(u32, Font).init(allocator),
+        };
+    }
+
+    /// Initialize with embedded font data (no file I/O)
+    pub fn initFromMemory(allocator: std.mem.Allocator, data: []const u8, renderer: *Renderer) FontCache {
+        return FontCache{
+            .allocator = allocator,
+            .font_path = "",
+            .font_data = data,
             .renderer = renderer,
             .cache = std.AutoHashMap(u32, Font).init(allocator),
         };
@@ -24,7 +37,10 @@ pub const FontCache = struct {
             return font;
         }
 
-        const font = try Font.load(self.allocator, self.renderer, self.font_path, pixel_height);
+        const font = if (self.font_data) |data|
+            try Font.loadFromMemory(self.allocator, self.renderer, data, pixel_height)
+        else
+            try Font.load(self.allocator, self.renderer, self.font_path, pixel_height);
         try self.cache.put(size_key, font);
 
         return self.cache.getPtr(size_key).?;
