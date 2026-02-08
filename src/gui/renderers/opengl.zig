@@ -13,6 +13,7 @@ pub const GLRenderer = struct {
     vbo: u32,
     ibo: u32,
     vao: u32,
+    fallback_texture: u32,
     allocator: std.mem.Allocator,
     proj_loc: i32,
     tex_loc: i32,
@@ -32,6 +33,7 @@ pub const GLRenderer = struct {
             .vbo = 0,
             .ibo = 0,
             .vao = 0,
+            .fallback_texture = 0,
             .proj_loc = 0,
             .tex_loc = 0,
             .allocator = allocator,
@@ -40,6 +42,7 @@ pub const GLRenderer = struct {
 
         self.shader = createShader();
         setupBuffers(&self);
+        self.fallback_texture = createFallbackTexture();
         return self;
     }
 
@@ -48,6 +51,7 @@ pub const GLRenderer = struct {
         gl.glDeleteBuffers(1, &self.vbo);
         gl.glDeleteBuffers(1, &self.ibo);
         gl.glDeleteVertexArrays(1, &self.vao);
+        gl.glDeleteTextures(1, &self.fallback_texture);
     }
 
     pub fn render(self: *GLRenderer, ctx: *GuiContext, width: i32, height: i32) void {
@@ -115,12 +119,13 @@ pub const GLRenderer = struct {
         for (commands) |cmd| {
             if (cmd.elem_count == 0) continue;
 
-            // Only bind texture if it's valid (non-zero)
-            // Shader handles non-textured geometry via UV coordinates
             if (cmd.texture != 0) {
                 const tex_id: u32 = @intCast(cmd.texture);
                 gl.glBindTexture(gl.GL_TEXTURE_2D, tex_id);
                 checkGlError("glBindTexture");
+            } else {
+                // Bind fallback texture so the sampler has a valid texture on all drivers
+                gl.glBindTexture(gl.GL_TEXTURE_2D, self.fallback_texture);
             }
 
             const offset_ptr: ?*const anyopaque = @ptrFromInt(cmd.index_offset * @sizeOf(u32));
@@ -136,6 +141,17 @@ pub const GLRenderer = struct {
         }
     }
 };
+
+fn createFallbackTexture() u32 {
+    var tex: u32 = 0;
+    gl.glGenTextures(1, &tex);
+    gl.glBindTexture(gl.GL_TEXTURE_2D, tex);
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_NEAREST);
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_NEAREST);
+    const pixel = [_]u8{ 255, 255, 255, 255 };
+    gl.glTexImage2D(gl.GL_TEXTURE_2D, 0, gl.GL_RGBA, 1, 1, 0, gl.GL_RGBA, gl.GL_UNSIGNED_BYTE, &pixel);
+    return tex;
+}
 
 fn setupBuffers(r: *GLRenderer) void {
     gl.glGenVertexArrays(1, &r.vao);
@@ -205,8 +221,8 @@ fn createShader() u32 {
         \\layout (location = 0) out vec4 out_color;
         \\
         \\void main() {
-        \\    // Check if this is non-textured geometry (default UV is 1.0, 0.0)
-        \\    if (vUV.x >= 0.99 && vUV.y <= 0.01) {
+        \\    // Check if this is non-textured geometry (default UV is -1.0, -1.0)
+        \\    if (vUV.x < 0.0) {
         \\        // Solid color rendering (for rectangles, shapes, etc.)
         \\        out_color = vColor;
         \\    } else {
