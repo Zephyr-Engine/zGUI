@@ -22,21 +22,15 @@ const DockingContext = zgui.docking.DockingContext;
 const PanelInfo = zgui.docking.PanelInfo;
 const WindowManager = zgui.WindowManager;
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     try Window.init();
     defer Window.deinit();
 
     // Use performant C allocator in release modes, GPA in debug for safety checks
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        if (builtin.mode == .Debug) {
-            _ = gpa.deinit();
-        }
-    }
-    const allocator = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
+    const allocator = if (builtin.mode == .Debug) init.gpa else std.heap.c_allocator;
 
     // Create window manager
-    var window_manager = WindowManager.init(allocator);
+    var window_manager = WindowManager.init(allocator, init.io);
     defer window_manager.deinit();
 
     // Register all panels with centralized registry

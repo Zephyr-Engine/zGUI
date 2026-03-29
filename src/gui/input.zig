@@ -88,6 +88,11 @@ pub const Input = struct {
     chars_count: usize,
     keys_just_pressed: [512]bool,
 
+    // Pending buffers for injected input (survives beginFrame, flushed by finalizeInjectedInput)
+    pending_chars_buffer: [32]u32,
+    pending_chars_count: usize,
+    pending_keys_just_pressed: [512]bool,
+
     ctrl_pressed: bool,
     alt_pressed: bool,
     super_pressed: bool,
@@ -114,6 +119,9 @@ pub const Input = struct {
             .chars_buffer = [_]u32{0} ** 32,
             .chars_count = 0,
             .keys_just_pressed = [_]bool{false} ** 512,
+            .pending_chars_buffer = [_]u32{0} ** 32,
+            .pending_chars_count = 0,
+            .pending_keys_just_pressed = [_]bool{false} ** 512,
             .ctrl_pressed = false,
             .alt_pressed = false,
             .super_pressed = false,
@@ -185,25 +193,26 @@ pub const Input = struct {
             self.chars_buffer[self.chars_count] = codepoint;
             self.chars_count += 1;
         }
+        if (self.pending_chars_count < self.pending_chars_buffer.len) {
+            self.pending_chars_buffer[self.pending_chars_count] = codepoint;
+            self.pending_chars_count += 1;
+        }
     }
 
     pub fn registerKey(self: *Input, key: c_int, action: c_int) void {
+        const press_val = @intFromEnum(window_mod.KeyAction.press);
+        const repeat_val = @intFromEnum(window_mod.KeyAction.repeat);
+
         if (key >= 0 and key < 512) {
             const key_idx: usize = @intCast(key);
-            const press_val = @intFromEnum(window_mod.KeyAction.press);
-            const repeat_val = @intFromEnum(window_mod.KeyAction.repeat);
-            // const release_val = @intFromEnum(window_mod.KeyAction.release);
 
             if (action == press_val or action == repeat_val) {
                 self.keys_just_pressed[key_idx] = true;
+                self.pending_keys_just_pressed[key_idx] = true;
             }
         }
     }
 
-    /// Finalize per-frame input state after external event injection.
-    /// In embedded mode, events are injected after beginFrame() clears state.
-    /// This re-transfers accumulated click counts to clicked flags and
-    /// should be called after all events for the current frame have been injected.
     pub fn finalizeInjectedInput(self: *Input) void {
         if (self.mouse_left_click_count > 0) {
             self.mouse_left_clicked = true;
@@ -217,6 +226,21 @@ pub const Input = struct {
             self.mouse_middle_clicked = true;
             self.mouse_middle_click_count = 0;
         }
+
+        // Flush pending chars (injected before newFrame/beginFrame wiped the active buffers)
+        if (self.pending_chars_count > 0) {
+            self.chars_count = self.pending_chars_count;
+            @memcpy(self.chars_buffer[0..self.pending_chars_count], self.pending_chars_buffer[0..self.pending_chars_count]);
+            self.pending_chars_count = 0;
+        }
+
+        // Flush pending key presses
+        for (0..512) |i| {
+            if (self.pending_keys_just_pressed[i]) {
+                self.keys_just_pressed[i] = true;
+            }
+        }
+        @memset(&self.pending_keys_just_pressed, false);
     }
 
     pub fn isKeyJustPressed(self: *const Input, key: c_int) bool {

@@ -166,27 +166,21 @@ fn deserializeNode(allocator: std.mem.Allocator, lines: [][]const u8, index: *us
 }
 
 /// Save layout to a file
-pub fn saveLayoutToFile(allocator: std.mem.Allocator, root: ?*DockNode, file_path: []const u8) !void {
+pub fn saveLayoutToFile(allocator: std.mem.Allocator, root: ?*DockNode, file_path: []const u8, io: std.Io) !void {
     const data = try serializeLayout(allocator, root);
     defer allocator.free(data);
 
-    const file = try std.fs.cwd().createFile(file_path, .{});
-    defer file.close();
-
-    try file.writeAll(data);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = file_path, .data = data });
 }
 
 /// Load layout from a file
-pub fn loadLayoutFromFile(allocator: std.mem.Allocator, file_path: []const u8) !?*DockNode {
-    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+pub fn loadLayoutFromFile(allocator: std.mem.Allocator, file_path: []const u8, io: std.Io) !?*DockNode {
+    const data = std.Io.Dir.cwd().readFileAlloc(io, file_path, allocator, .limited(1024 * 1024)) catch |err| {
         if (err == error.FileNotFound) {
             return null;
         }
         return err;
     };
-    defer file.close();
-
-    const data = try file.readToEndAlloc(allocator, 1024 * 1024); // Max 1MB
     defer allocator.free(data);
 
     return try deserializeLayout(allocator, data);
@@ -213,6 +207,7 @@ pub fn saveMultiWindowLayout(
     allocator: std.mem.Allocator,
     manager: *anyopaque, // WindowManager pointer
     file_path: []const u8,
+    io: std.Io,
 ) !void {
     const WindowManager = @import("../window_manager.zig").WindowManager;
     const window_manager: *WindowManager = @ptrCast(@alignCast(manager));
@@ -263,23 +258,19 @@ pub fn saveMultiWindowLayout(
     }
 
     // Write to file
-    const file = try std.fs.cwd().createFile(file_path, .{});
-    defer file.close();
-    try file.writeAll(buffer.items);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = file_path, .data = buffer.items });
 }
 
 /// Load multi-window layout from file
 pub fn loadMultiWindowLayout(
     allocator: std.mem.Allocator,
     file_path: []const u8,
+    io: std.Io,
 ) !?MultiWindowLayout {
-    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+    const data = std.Io.Dir.cwd().readFileAlloc(io, file_path, allocator, .limited(1024 * 1024)) catch |err| {
         if (err == error.FileNotFound) return null;
         return err;
     };
-    defer file.close();
-
-    const data = try file.readToEndAlloc(allocator, 1024 * 1024);
     defer allocator.free(data);
 
     // Parse header
