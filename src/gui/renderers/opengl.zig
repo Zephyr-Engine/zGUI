@@ -75,7 +75,7 @@ pub const GLRenderer = struct {
             gl.glEnable(gl.GL_BLEND);
             gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA);
             gl.glDisable(gl.GL_DEPTH_TEST);
-            gl.glDisable(gl.GL_MULTISAMPLE);
+            gl.glEnable(gl.GL_MULTISAMPLE);
         } else {
             // Clear the screen (standalone mode only)
             gl.glClear(gl.GL_COLOR_BUFFER_BIT);

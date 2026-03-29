@@ -43,6 +43,7 @@ pub const WindowContext = struct {
 
 pub const WindowManager = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     main_window_id: WindowId,
     windows: std.AutoHashMap(WindowId, *WindowContext),
     panel_registry: std.AutoHashMap(u64, PanelInfo),
@@ -52,9 +53,10 @@ pub const WindowManager = struct {
     active_drag_window: ?WindowId,
     drag_panel_id: ?u64,
 
-    pub fn init(allocator: std.mem.Allocator) WindowManager {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io) WindowManager {
         return .{
             .allocator = allocator,
+            .io = io,
             .main_window_id = 0,
             .windows = std.AutoHashMap(WindowId, *WindowContext).init(allocator),
             .panel_registry = std.AutoHashMap(u64, PanelInfo).init(allocator),
@@ -97,7 +99,7 @@ pub const WindowManager = struct {
         renderer.* = try opengl.createRenderer(self.allocator, Window);
 
         // Create GUI context
-        var gui = try GuiContext.init(self.allocator, renderer, window);
+        var gui = try GuiContext.init(self.allocator, renderer, window, self.io);
 
         // Set initial window size (in logical coordinates)
         var fb_width: i32 = 0;
@@ -177,7 +179,7 @@ pub const WindowManager = struct {
         renderer.* = try opengl.createRenderer(self.allocator, Window);
 
         // Create GuiContext
-        var gui = try GuiContext.init(self.allocator, renderer, window);
+        var gui = try GuiContext.init(self.allocator, renderer, window, self.io);
 
         // Set initial window size (in logical coordinates)
         var fb_width: i32 = 0;
@@ -402,12 +404,12 @@ pub const WindowManager = struct {
 
     /// Save multi-window layout to file
     pub fn saveLayout(self: *WindowManager, file_path: []const u8) !void {
-        try persistence.saveMultiWindowLayout(self.allocator, self, file_path);
+        try persistence.saveMultiWindowLayout(self.allocator, self, file_path, self.io);
     }
 
     /// Load multi-window layout from file
     pub fn loadLayout(self: *WindowManager, file_path: []const u8) !bool {
-        const layout = try persistence.loadMultiWindowLayout(self.allocator, file_path);
+        const layout = try persistence.loadMultiWindowLayout(self.allocator, file_path, self.io);
         if (layout) |multi_layout| {
             defer {
                 for (multi_layout.windows) |*window_data| {

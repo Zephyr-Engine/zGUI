@@ -42,11 +42,8 @@ pub const Font = struct {
         return loadFromData(allocator, renderer, font_data, pixel_height);
     }
 
-    pub fn load(allocator: std.mem.Allocator, renderer: *Renderer, path: []const u8, pixel_height: f32) !Font {
-        var file = try std.fs.cwd().openFile(path, .{});
-        defer file.close();
-
-        const data = try file.readToEndAlloc(allocator, 4 * 1024 * 1024);
+    pub fn load(allocator: std.mem.Allocator, renderer: *Renderer, path: []const u8, pixel_height: f32, io: std.Io) !Font {
+        const data = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(4 * 1024 * 1024));
         defer allocator.free(data);
 
         return loadFromData(allocator, renderer, data, pixel_height);

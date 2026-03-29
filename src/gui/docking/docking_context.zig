@@ -94,14 +94,14 @@ pub const DockingContext = struct {
     }
 
     /// Save the current layout to a file
-    pub fn saveLayout(self: *DockingContext, file_path: []const u8) !void {
-        try persistence.saveLayoutToFile(self.allocator, self.dock_space.root, file_path);
+    pub fn saveLayout(self: *DockingContext, file_path: []const u8, io: std.Io) !void {
+        try persistence.saveLayoutToFile(self.allocator, self.dock_space.root, file_path, io);
     }
 
     /// Load layout from a file
     /// Returns true if layout was loaded, false if file doesn't exist
-    pub fn loadLayout(self: *DockingContext, file_path: []const u8) !bool {
-        const loaded_root = try persistence.loadLayoutFromFile(self.allocator, file_path);
+    pub fn loadLayout(self: *DockingContext, file_path: []const u8, io: std.Io) !bool {
+        const loaded_root = try persistence.loadLayoutFromFile(self.allocator, file_path, io);
         if (loaded_root) |root| {
             // Free existing root if any
             if (self.dock_space.root) |old_root| {

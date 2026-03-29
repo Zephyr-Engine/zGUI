@@ -8,25 +8,28 @@ pub const FontCache = struct {
     font_data: ?[]const u8,
     renderer: *Renderer,
     cache: std.AutoHashMap(u32, Font),
+    io: std.Io,
 
-    pub fn init(allocator: std.mem.Allocator, font_path: []const u8, renderer: *Renderer) FontCache {
+    pub fn init(allocator: std.mem.Allocator, font_path: []const u8, renderer: *Renderer, io: std.Io) FontCache {
         return FontCache{
             .allocator = allocator,
             .font_path = font_path,
             .font_data = null,
             .renderer = renderer,
             .cache = std.AutoHashMap(u32, Font).init(allocator),
+            .io = io,
         };
     }
 
     /// Initialize with embedded font data (no file I/O)
-    pub fn initFromMemory(allocator: std.mem.Allocator, data: []const u8, renderer: *Renderer) FontCache {
+    pub fn initFromMemory(allocator: std.mem.Allocator, data: []const u8, renderer: *Renderer, io: std.Io) FontCache {
         return FontCache{
             .allocator = allocator,
             .font_path = "",
             .font_data = data,
             .renderer = renderer,
             .cache = std.AutoHashMap(u32, Font).init(allocator),
+            .io = io,
         };
     }
 
@@ -40,7 +43,7 @@ pub const FontCache = struct {
         const font = if (self.font_data) |data|
             try Font.loadFromMemory(self.allocator, self.renderer, data, pixel_height)
         else
-            try Font.load(self.allocator, self.renderer, self.font_path, pixel_height);
+            try Font.load(self.allocator, self.renderer, self.font_path, pixel_height, self.io);
         try self.cache.put(size_key, font);
 
         return self.cache.getPtr(size_key).?;

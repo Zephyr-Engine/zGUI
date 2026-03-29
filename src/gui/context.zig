@@ -146,7 +146,7 @@ pub const GuiContext = struct {
     // Platform callbacks for embedded mode
     platform_callbacks: ?PlatformCallbacks,
 
-    pub fn init(allocator: std.mem.Allocator, renderer: *Renderer, win: ?Window) !GuiContext {
+    pub fn init(allocator: std.mem.Allocator, renderer: *Renderer, win: ?Window, io: std.Io) !GuiContext {
         // Only create cursors if we have a window
         const arrow_cursor = if (win) |_| window.createStandardCursor(.arrow) else null;
         const hand_cursor = if (win) |_| window.createStandardCursor(.hand) else null;
@@ -174,7 +174,7 @@ pub const GuiContext = struct {
             .frame_allocator = frame_allocator,
             .draw_list = draw_list,
             .input = Input.init(),
-            .font_cache = FontCache.init(allocator, "assets/RobotoMono-Regular.ttf", renderer),
+            .font_cache = FontCache.init(allocator, "assets/RobotoMono-Regular.ttf", renderer, io),
             .current_font_texture = 0,
             .renderer = renderer,
             .window = win,
@@ -220,6 +220,7 @@ pub const GuiContext = struct {
         renderer: *Renderer,
         font_data: []const u8,
         platform: PlatformCallbacks,
+        io: std.Io,
     ) !GuiContext {
         // Create frame arena allocator
         var frame_arena = std.heap.ArenaAllocator.init(allocator);
@@ -234,7 +235,7 @@ pub const GuiContext = struct {
             .frame_allocator = frame_allocator,
             .draw_list = draw_list,
             .input = Input.init(),
-            .font_cache = FontCache.initFromMemory(allocator, font_data, renderer),
+            .font_cache = FontCache.initFromMemory(allocator, font_data, renderer, io),
             .current_font_texture = 0,
             .renderer = renderer,
             .window = null,
@@ -580,9 +581,6 @@ pub const GuiContext = struct {
         self.theme = new_theme;
     }
 
-    /// Finalize input state after external event injection in embedded mode.
-    /// Call this after newFrame() and after injecting all events for the frame.
-    /// Re-transfers click counts to clicked flags that beginFrame() already cleared.
     pub fn finalizeInjectedInput(self: *GuiContext) void {
         self.input.finalizeInjectedInput();
     }
