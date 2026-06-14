@@ -4,74 +4,65 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Add debug option (use -Ddebug=true to enable)
-    const debug = b.option(bool, "debug", "Enable debug features (FPS counter, etc)") orelse false;
+    const glfw_dep = b.dependency("glfw_zig", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
-    // Build zGUI as a static library
-    const lib = b.addLibrary(.{
-        .name = "zgui",
+    const glad_dep = b.dependency("zig_glad", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const mod = b.addModule("zGUI_retained", .{
+        .root_source_file = b.path("src/ui/ui.zig"),
+        .target = target,
+    });
+    mod.addIncludePath(b.path("third_party/stb"));
+    mod.addCSourceFile(.{ .file = b.path("src/ui/render/stb_truetype_impl.c") });
+    mod.linkSystemLibrary("c", .{});
+    mod.linkLibrary(glfw_dep.artifact("glfw"));
+    mod.linkLibrary(glad_dep.artifact("glad"));
+
+    const exe = b.addExecutable(.{
+        .name = "zGUI_retained",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/zgui.zig"),
+            .root_source_file = b.path("examples/editor_demo.zig"),
+
             .target = target,
             .optimize = optimize,
+
+            .imports = &.{
+                .{ .name = "zGUI_retained", .module = mod },
+            },
         }),
     });
 
-    // Add build options to the library module
-    const build_options = b.addOptions();
-    build_options.addOption(bool, "debug", debug);
-    lib.root_module.addOptions("build_options", build_options);
+    b.installArtifact(exe);
 
-    // Link dependencies
-    const glfw_dependency = b.dependency("glfw_zig", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    lib.root_module.linkLibrary(glfw_dependency.artifact("glfw"));
+    const run_step = b.step("run", "Run the app");
+    const run_cmd = b.addRunArtifact(exe);
+    run_step.dependOn(&run_cmd.step);
 
-    const glad_dependency = b.dependency("zig_glad", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    lib.root_module.linkLibrary(glad_dependency.artifact("glad"));
+    run_cmd.step.dependOn(b.getInstallStep());
 
-    // Add C source files
-    lib.root_module.addIncludePath(b.path("external/font"));
-    lib.root_module.addCSourceFile(.{
-        .file = b.path("external/font/stb_truetype.c"),
-        .flags = &[_][]const u8{"-O3"},
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+
+    const mod_tests = b.addTest(.{
+        .root_module = mod,
     });
 
-    lib.root_module.addIncludePath(b.path("external/image"));
-    lib.root_module.addCSourceFile(.{
-        .file = b.path("external/image/stb_image.c"),
-        .flags = &[_][]const u8{"-O3"},
+    const run_mod_tests = b.addRunArtifact(mod_tests);
+
+    const exe_tests = b.addTest(.{
+        .root_module = exe.root_module,
     });
 
-    b.installArtifact(lib);
+    const run_exe_tests = b.addRunArtifact(exe_tests);
 
-    // Export the module for use by other projects
-    // Note: build_options should be provided by the consuming project
-    const zgui_module = b.addModule("zgui", .{
-        .root_source_file = b.path("src/zgui.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    // Add all dependencies to the exported module (but NOT build_options)
-    zgui_module.linkLibrary(glfw_dependency.artifact("glfw"));
-    zgui_module.linkLibrary(glad_dependency.artifact("glad"));
-
-    // Use b.path() which creates paths relative to this build.zig file
-    zgui_module.addIncludePath(b.path("external/font"));
-    zgui_module.addCSourceFile(.{
-        .file = b.path("external/font/stb_truetype.c"),
-        .flags = &[_][]const u8{"-O3"},
-    });
-
-    zgui_module.addIncludePath(b.path("external/image"));
-    zgui_module.addCSourceFile(.{
-        .file = b.path("external/image/stb_image.c"),
-        .flags = &[_][]const u8{"-O3"},
-    });
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_mod_tests.step);
+    test_step.dependOn(&run_exe_tests.step);
 }
