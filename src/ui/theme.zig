@@ -102,6 +102,8 @@ pub const StyleOptions = struct {
     margin: style_mod.Edges = .{},
     gap: f32 = 0,
     direction: style_mod.LayoutDirection = .column,
+    overflow_x: style_mod.Overflow = .visible,
+    overflow_y: style_mod.Overflow = .visible,
     background: ColorRole = .transparent,
     foreground: ColorRole = .text,
     border: ColorRole = .transparent,
@@ -109,6 +111,7 @@ pub const StyleOptions = struct {
     border_edges: ?style_mod.Edges = null,
     radius: RadiusRole = .none,
     radius_px: ?f32 = null,
+    radius_corners: ?style_mod.CornerRadii = null,
     font_size: f32 = 16,
 };
 
@@ -178,12 +181,14 @@ pub const Theme = struct {
             .margin = options.margin,
             .gap = options.gap,
             .direction = options.direction,
+            .overflow_x = options.overflow_x,
+            .overflow_y = options.overflow_y,
             .background = self.color(options.background),
             .foreground = self.color(options.foreground),
             .border_color = self.color(options.border),
             .border_width = options.border_width,
             .border_edges = options.border_edges,
-            .radius = options.radius_px orelse self.radius(options.radius),
+            .radius = options.radius_corners orelse style_mod.CornerRadii.all(options.radius_px orelse self.radius(options.radius)),
             .font_size = options.font_size,
         };
     }

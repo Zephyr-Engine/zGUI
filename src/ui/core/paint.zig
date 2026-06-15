@@ -15,14 +15,14 @@ pub const PaintCommand = union(enum) {
 pub const RectPaint = struct {
     rect: types.Rect,
     color: types.Color,
-    radius: f32 = 0,
+    radius: style_mod.CornerRadii = .{},
 };
 
 pub const BorderPaint = struct {
     rect: types.Rect,
     color: types.Color,
     widths: style_mod.Edges,
-    radius: f32 = 0,
+    radius: style_mod.CornerRadii = .{},
 };
 
 pub const TextPaint = struct {
@@ -38,7 +38,7 @@ pub const ImagePaint = struct {
     uv0: types.Vec2 = .{ .x = 0, .y = 0 },
     uv1: types.Vec2 = .{ .x = 1, .y = 1 },
     tint: types.Color = types.Color.rgba(255, 255, 255, 255),
-    radius: f32 = 0,
+    radius: style_mod.CornerRadii = .{},
 };
 
 pub const PaintList = struct {
@@ -67,7 +67,8 @@ pub fn buildPaintList(tree: *const tree_mod.UiTree, root: types.NodeId, list: *P
     const node = tree.getConst(root) orelse return;
     if (!node.flags.visible) return;
 
-    if (node.flags.clipped) try list.append(.{ .clip_push = node.bounds });
+    const clipped = node.flags.clipped or node.style.overflow_x == .scroll or node.style.overflow_y == .scroll;
+    if (clipped) try list.append(.{ .clip_push = node.bounds });
 
     var background = node.style.background;
     var border = node.style.border_color;
@@ -131,7 +132,7 @@ pub fn buildPaintList(tree: *const tree_mod.UiTree, root: types.NodeId, list: *P
         child = child_node.next_sibling;
     }
 
-    if (node.flags.clipped) try list.append(.clip_pop);
+    if (clipped) try list.append(.clip_pop);
 }
 
 fn lighten(color: types.Color, amount: u8) types.Color {

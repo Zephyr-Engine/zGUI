@@ -41,6 +41,8 @@ pub const Node = struct {
     prev_sibling: types.NodeId = types.invalid_node,
 
     bounds: types.Rect = .{},
+    scroll_offset: types.Vec2 = .{},
+    scroll_target_offset: types.Vec2 = .{},
 
     style: style_mod.Style = .{},
     layout: layout_mod.Layout = .{},

@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("../core/types.zig");
+const style_mod = @import("../core/style.zig");
 const text_mod = @import("../core/text.zig");
 const paint = @import("../core/paint.zig");
 const draw_data = @import("draw_data.zig");
@@ -54,7 +55,7 @@ pub const Batcher = struct {
                         try self.addText(text, atlas, text_raster_scale);
                     }
                 },
-                .clip_push => |clip| try self.clip_stack.append(self.allocator, clip),
+                .clip_push => |clip| try self.clip_stack.append(self.allocator, intersectRects(self.currentClip(), clip)),
                 .clip_pop => _ = self.clip_stack.pop(),
             }
         }
@@ -66,9 +67,9 @@ pub const Batcher = struct {
         };
     }
 
-    fn addFilledRect(self: *Batcher, rect: types.Rect, color: types.Color, radius: f32) !void {
+    fn addFilledRect(self: *Batcher, rect: types.Rect, color: types.Color, radius: style_mod.CornerRadii) !void {
         if (rect.isEmpty() or color.a == 0) return;
-        if (clampedRadius(rect, radius) > 0) {
+        if (hasRoundedCorner(rect, radius)) {
             try self.addRoundedTexturedRect(
                 rect,
                 .{ .x = 0, .y = 0 },
@@ -93,26 +94,26 @@ pub const Batcher = struct {
         const r = border.rect;
         const widths = border.widths;
         if (uniformBorderWidth(widths)) |width| {
-            if (width > 0 and clampedRadius(r, border.radius) > 0) {
+            if (width > 0 and hasRoundedCorner(r, border.radius)) {
                 try self.addRoundedBorder(border, width);
                 return;
             }
         }
 
         if (widths.top > 0) {
-            try self.addFilledRect(.{ .x = r.x, .y = r.y, .w = r.w, .h = widths.top }, border.color, 0);
+            try self.addFilledRect(.{ .x = r.x, .y = r.y, .w = r.w, .h = widths.top }, border.color, .{});
         }
         if (widths.bottom > 0) {
-            try self.addFilledRect(.{ .x = r.x, .y = r.y + r.h - widths.bottom, .w = r.w, .h = widths.bottom }, border.color, 0);
+            try self.addFilledRect(.{ .x = r.x, .y = r.y + r.h - widths.bottom, .w = r.w, .h = widths.bottom }, border.color, .{});
         }
 
         const side_y = r.y + widths.top;
         const side_h = @max(0, r.h - widths.top - widths.bottom);
         if (widths.left > 0) {
-            try self.addFilledRect(.{ .x = r.x, .y = side_y, .w = widths.left, .h = side_h }, border.color, 0);
+            try self.addFilledRect(.{ .x = r.x, .y = side_y, .w = widths.left, .h = side_h }, border.color, .{});
         }
         if (widths.right > 0) {
-            try self.addFilledRect(.{ .x = r.x + r.w - widths.right, .y = side_y, .w = widths.right, .h = side_h }, border.color, 0);
+            try self.addFilledRect(.{ .x = r.x + r.w - widths.right, .y = side_y, .w = widths.right, .h = side_h }, border.color, .{});
         }
     }
 
@@ -143,7 +144,7 @@ pub const Batcher = struct {
         var outer_points: [rounded_point_count]types.Vec2 = undefined;
         var inner_points: [rounded_point_count]types.Vec2 = undefined;
         const outer_count = roundedRectPoints(outer, border.radius, &outer_points);
-        const inner_count = roundedRectPoints(inner, @max(0, border.radius - border_width), &inner_points);
+        const inner_count = roundedRectPoints(inner, insetRadii(border.radius, border_width), &inner_points);
         if (outer_count < 3 or inner_count != outer_count) return;
 
         try self.ensureBatch(white_texture_id, self.currentClip());
@@ -174,7 +175,7 @@ pub const Batcher = struct {
         if (self.antialias_width > 0) {
             var fringe_points: [rounded_point_count]types.Vec2 = undefined;
             const fringe_rect = outsetRect(outer, self.antialias_width);
-            const fringe_count = roundedRectPoints(fringe_rect, border.radius + self.antialias_width, &fringe_points);
+            const fringe_count = roundedRectPoints(fringe_rect, outsetRadii(border.radius, self.antialias_width), &fringe_points);
             if (fringe_count == outer_count) {
                 try self.addTexturedRing(
                     outer,
@@ -237,7 +238,7 @@ pub const Batcher = struct {
 
     fn addImage(self: *Batcher, image: paint.ImagePaint) !void {
         if (image.texture_id == 0 or image.tint.a == 0) return;
-        if (clampedRadius(image.rect, image.radius) > 0) {
+        if (hasRoundedCorner(image.rect, image.radius)) {
             try self.addRoundedTexturedRect(image.rect, image.uv0, image.uv1, image.tint, image.texture_id, image.radius);
             return;
         }
@@ -287,17 +288,16 @@ pub const Batcher = struct {
         uv1: types.Vec2,
         color: types.Color,
         texture_id: u32,
-        radius: f32,
+        radius: style_mod.CornerRadii,
     ) !void {
         if (rect.isEmpty() or color.a == 0) return;
-        const r = clampedRadius(rect, radius);
-        if (r <= 0) {
+        if (!hasRoundedCorner(rect, radius)) {
             try self.addTexturedRect(rect, uv0, uv1, color, texture_id);
             return;
         }
 
         var points: [rounded_point_count]types.Vec2 = undefined;
-        const count = roundedRectPoints(rect, r, &points);
+        const count = roundedRectPoints(rect, radius, &points);
         if (count < 3) return;
 
         try self.ensureBatch(texture_id, self.currentClip());
@@ -332,7 +332,7 @@ pub const Batcher = struct {
         if (self.antialias_width > 0) {
             var fringe_points: [rounded_point_count]types.Vec2 = undefined;
             const fringe_rect = outsetRect(rect, self.antialias_width);
-            const fringe_count = roundedRectPoints(fringe_rect, r + self.antialias_width, &fringe_points);
+            const fringe_count = roundedRectPoints(fringe_rect, outsetRadii(radius, self.antialias_width), &fringe_points);
             if (fringe_count == count) {
                 try self.addTexturedRing(
                     rect,
@@ -420,14 +420,59 @@ fn rectEqual(a: types.Rect, b: types.Rect) bool {
     return a.x == b.x and a.y == b.y and a.w == b.w and a.h == b.h;
 }
 
+fn intersectRects(a: types.Rect, b: types.Rect) types.Rect {
+    const min_x = @max(a.x, b.x);
+    const min_y = @max(a.y, b.y);
+    const max_x = @min(a.x + a.w, b.x + b.w);
+    const max_y = @min(a.y + a.h, b.y + b.h);
+    return .{
+        .x = min_x,
+        .y = min_y,
+        .w = @max(0, max_x - min_x),
+        .h = @max(0, max_y - min_y),
+    };
+}
+
 fn uniformBorderWidth(widths: anytype) ?f32 {
     if (widths.top != widths.right or widths.top != widths.bottom or widths.top != widths.left) return null;
     return widths.top;
 }
 
-fn clampedRadius(rect: types.Rect, radius: f32) f32 {
+fn clampedRadiusValue(rect: types.Rect, radius: f32) f32 {
     if (!std.math.isFinite(radius) or radius <= 0) return 0;
     return @min(radius, @min(rect.w, rect.h) * 0.5);
+}
+
+fn clampedRadii(rect: types.Rect, radius: style_mod.CornerRadii) style_mod.CornerRadii {
+    return .{
+        .top_left = clampedRadiusValue(rect, radius.top_left),
+        .top_right = clampedRadiusValue(rect, radius.top_right),
+        .bottom_right = clampedRadiusValue(rect, radius.bottom_right),
+        .bottom_left = clampedRadiusValue(rect, radius.bottom_left),
+    };
+}
+
+fn hasRoundedCorner(rect: types.Rect, radius: style_mod.CornerRadii) bool {
+    const r = clampedRadii(rect, radius);
+    return r.top_left > 0 or r.top_right > 0 or r.bottom_right > 0 or r.bottom_left > 0;
+}
+
+fn insetRadii(radius: style_mod.CornerRadii, amount: f32) style_mod.CornerRadii {
+    return .{
+        .top_left = @max(0, radius.top_left - amount),
+        .top_right = @max(0, radius.top_right - amount),
+        .bottom_right = @max(0, radius.bottom_right - amount),
+        .bottom_left = @max(0, radius.bottom_left - amount),
+    };
+}
+
+fn outsetRadii(radius: style_mod.CornerRadii, amount: f32) style_mod.CornerRadii {
+    return .{
+        .top_left = radius.top_left + amount,
+        .top_right = radius.top_right + amount,
+        .bottom_right = radius.bottom_right + amount,
+        .bottom_left = radius.bottom_left + amount,
+    };
 }
 
 fn antialiasWidth(raster_scale: f32) f32 {
@@ -454,9 +499,9 @@ fn withAlpha(color: types.Color, alpha_factor: f32) types.Color {
     };
 }
 
-fn roundedRectPoints(rect: types.Rect, radius: f32, points: *[rounded_point_count]types.Vec2) usize {
-    const r = clampedRadius(rect, radius);
-    if (r <= 0) {
+fn roundedRectPoints(rect: types.Rect, radius: style_mod.CornerRadii, points: *[rounded_point_count]types.Vec2) usize {
+    const r = clampedRadii(rect, radius);
+    if (r.top_left <= 0 and r.top_right <= 0 and r.bottom_right <= 0 and r.bottom_left <= 0) {
         points[0] = .{ .x = rect.x, .y = rect.y };
         points[1] = .{ .x = rect.x + rect.w, .y = rect.y };
         points[2] = .{ .x = rect.x + rect.w, .y = rect.y + rect.h };
@@ -467,23 +512,25 @@ fn roundedRectPoints(rect: types.Rect, radius: f32, points: *[rounded_point_coun
     const pi = std.math.pi;
     const quarter_turn = pi * 0.5;
     const centers = [_]types.Vec2{
-        .{ .x = rect.x + rect.w - r, .y = rect.y + r },
-        .{ .x = rect.x + rect.w - r, .y = rect.y + rect.h - r },
-        .{ .x = rect.x + r, .y = rect.y + rect.h - r },
-        .{ .x = rect.x + r, .y = rect.y + r },
+        .{ .x = rect.x + rect.w - r.top_right, .y = rect.y + r.top_right },
+        .{ .x = rect.x + rect.w - r.bottom_right, .y = rect.y + rect.h - r.bottom_right },
+        .{ .x = rect.x + r.bottom_left, .y = rect.y + rect.h - r.bottom_left },
+        .{ .x = rect.x + r.top_left, .y = rect.y + r.top_left },
     };
+    const radii = [_]f32{ r.top_right, r.bottom_right, r.bottom_left, r.top_left };
     const starts = [_]f32{ -quarter_turn, 0, quarter_turn, pi };
 
     var count: usize = 0;
     var corner: usize = 0;
     while (corner < centers.len) : (corner += 1) {
+        const corner_radius = radii[corner];
         var segment: usize = 0;
         while (segment <= rounded_corner_segments) : (segment += 1) {
             const progress = @as(f32, @floatFromInt(segment)) / @as(f32, @floatFromInt(rounded_corner_segments));
             const angle = starts[corner] + quarter_turn * progress;
             points[count] = .{
-                .x = centers[corner].x + @cos(angle) * r,
-                .y = centers[corner].y + @sin(angle) * r,
+                .x = centers[corner].x + @cos(angle) * corner_radius,
+                .y = centers[corner].y + @sin(angle) * corner_radius,
             };
             count += 1;
         }

@@ -13,6 +13,27 @@ pub const LayoutDirection = enum {
     absolute,
 };
 
+pub const Overflow = enum {
+    visible,
+    scroll,
+};
+
+pub const CornerRadii = struct {
+    top_left: f32 = 0,
+    top_right: f32 = 0,
+    bottom_right: f32 = 0,
+    bottom_left: f32 = 0,
+
+    pub fn all(v: f32) CornerRadii {
+        return .{
+            .top_left = v,
+            .top_right = v,
+            .bottom_right = v,
+            .bottom_left = v,
+        };
+    }
+};
+
 pub const Edges = struct {
     left: f32 = 0,
     right: f32 = 0,
@@ -44,6 +65,8 @@ pub const Style = struct {
     gap: f32 = 0,
 
     direction: LayoutDirection = .column,
+    overflow_x: Overflow = .visible,
+    overflow_y: Overflow = .visible,
 
     background: types.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
     foreground: types.Color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
@@ -51,7 +74,7 @@ pub const Style = struct {
     border_color: types.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
     border_width: f32 = 0,
     border_edges: ?Edges = null,
-    radius: f32 = 0,
+    radius: CornerRadii = .{},
 
     font_size: f32 = 16,
 };

@@ -319,7 +319,7 @@ fn createEditorUi(state: *ui.Ui) !DemoNodes {
         .foreground = ui.Color.rgba(255, 255, 255, 255),
         .border_color = ui.Color.rgba(104, 142, 220, 255),
         .border_width = 1,
-        .radius = 5,
+        .radius = ui.CornerRadii.all(5),
     });
 
     const click_label = try ui.widgets.label(state, toolbar, "Clicks 0", .{
@@ -374,7 +374,7 @@ fn createEditorUi(state: *ui.Ui) !DemoNodes {
         .background = ui.Color.rgba(22, 25, 32, 255),
         .border_color = ui.Color.rgba(58, 68, 88, 255),
         .border_width = 1,
-        .radius = 6,
+        .radius = ui.CornerRadii.all(6),
     });
     _ = try ui.widgets.label(state, viewport, "Viewport", .{
         .foreground = ui.Color.rgba(206, 216, 232, 255),
@@ -441,7 +441,7 @@ fn sidePanel(state: *ui.Ui, parent: ui.NodeId, title: []const u8, width: f32) !u
         .background = ui.Color.rgba(24, 28, 36, 255),
         .border_color = ui.Color.rgba(56, 66, 84, 255),
         .border_width = 1,
-        .radius = 6,
+        .radius = ui.CornerRadii.all(6),
     });
     _ = try ui.widgets.label(state, panel, title, .{
         .foreground = ui.Color.rgba(226, 232, 242, 255),

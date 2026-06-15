@@ -39,6 +39,7 @@ pub const DockManager = struct {
         position: dock_node.DockPosition,
     ) !void {
         if (target == types.invalid_dock_node or target >= self.nodes.items.len) return error.InvalidDockTarget;
+        try self.removeWindow(window, false);
 
         if (position == .center_tab) {
             switch (self.nodes.items[target]) {
@@ -48,14 +49,32 @@ pub const DockManager = struct {
                 },
                 .split => return error.InvalidDockTarget,
             }
+            self.cleanupEmptyLeaves();
             return;
         }
 
-        const result = try self.splitNode(target, position, 0.25);
+        const result = try self.splitNode(target, position, defaultDockSplitRatio(position));
         switch (self.nodes.items[result.new_leaf]) {
-            .leaf => |*leaf| try leaf.tabs.append(self.allocator, window),
+            .leaf => |*leaf| {
+                try leaf.tabs.append(self.allocator, window);
+                leaf.active_tab = leaf.tabs.items.len - 1;
+            },
             .split => unreachable,
         }
+        self.cleanupEmptyLeaves();
+    }
+
+    pub fn moveWindowToLeaf(self: *DockManager, window: types.WindowId, target: types.DockNodeId) !void {
+        if (target == types.invalid_dock_node or target >= self.nodes.items.len) return error.InvalidDockTarget;
+        try self.removeWindow(window, false);
+        switch (self.nodes.items[target]) {
+            .leaf => |*leaf| {
+                try leaf.tabs.append(self.allocator, window);
+                leaf.active_tab = leaf.tabs.items.len - 1;
+            },
+            .split => return error.InvalidDockTarget,
+        }
+        self.cleanupEmptyLeaves();
     }
 
     pub fn splitNode(
@@ -99,6 +118,10 @@ pub const DockManager = struct {
     }
 
     pub fn undockWindow(self: *DockManager, window: types.WindowId) !void {
+        try self.removeWindow(window, true);
+    }
+
+    fn removeWindow(self: *DockManager, window: types.WindowId, cleanup: bool) !void {
         for (self.nodes.items) |*node| {
             switch (node.*) {
                 .leaf => |*leaf| {
@@ -108,6 +131,7 @@ pub const DockManager = struct {
                             if (leaf.active_tab >= leaf.tabs.items.len) {
                                 leaf.active_tab = if (leaf.tabs.items.len == 0) 0 else leaf.tabs.items.len - 1;
                             }
+                            if (cleanup) self.cleanupEmptyLeaves();
                             return;
                         }
                     }
@@ -115,6 +139,44 @@ pub const DockManager = struct {
                 .split => {},
             }
         }
+    }
+
+    pub fn leafForWindow(self: *const DockManager, window: types.WindowId) ?types.DockNodeId {
+        for (self.nodes.items, 0..) |node, i| {
+            switch (node) {
+                .leaf => |leaf| {
+                    for (leaf.tabs.items) |tab| {
+                        if (tab == window) return @intCast(i);
+                    }
+                },
+                .split => {},
+            }
+        }
+        return null;
+    }
+
+    pub fn activeWindow(self: *const DockManager, leaf_id: types.DockNodeId) ?types.WindowId {
+        if (leaf_id == types.invalid_dock_node or leaf_id >= self.nodes.items.len) return null;
+        return switch (self.nodes.items[leaf_id]) {
+            .leaf => |leaf| if (leaf.tabs.items.len == 0) null else leaf.tabs.items[@min(leaf.active_tab, leaf.tabs.items.len - 1)],
+            .split => null,
+        };
+    }
+
+    pub fn setActiveWindow(self: *DockManager, leaf_id: types.DockNodeId, window: types.WindowId) bool {
+        if (leaf_id == types.invalid_dock_node or leaf_id >= self.nodes.items.len) return false;
+        switch (self.nodes.items[leaf_id]) {
+            .leaf => |*leaf| {
+                for (leaf.tabs.items, 0..) |tab, i| {
+                    if (tab == window) {
+                        leaf.active_tab = i;
+                        return true;
+                    }
+                }
+            },
+            .split => {},
+        }
+        return false;
     }
 
     pub fn layout(self: *DockManager, available: types.Rect) void {
@@ -197,6 +259,10 @@ pub const DockManager = struct {
         return self.hitTestResizeHandleNode(self.root, mouse_pos, @max(0, thickness));
     }
 
+    pub fn hitTestLeaf(self: *const DockManager, mouse_pos: types.Vec2) ?types.DockNodeId {
+        return self.hitTestLeafNode(self.root, mouse_pos);
+    }
+
     fn layoutNode(self: *DockManager, id: types.DockNodeId, rect: types.Rect) void {
         if (id == types.invalid_dock_node or id >= self.nodes.items.len) return;
         switch (self.nodes.items[id]) {
@@ -251,6 +317,50 @@ pub const DockManager = struct {
             },
         }
     }
+
+    fn hitTestLeafNode(self: *const DockManager, id: types.DockNodeId, mouse_pos: types.Vec2) ?types.DockNodeId {
+        if (id == types.invalid_dock_node or id >= self.nodes.items.len) return null;
+        switch (self.nodes.items[id]) {
+            .leaf => |leaf| return if (leaf.rect.contains(mouse_pos)) id else null,
+            .split => |split| {
+                if (self.hitTestLeafNode(split.first, mouse_pos)) |hit| return hit;
+                if (self.hitTestLeafNode(split.second, mouse_pos)) |hit| return hit;
+                return null;
+            },
+        }
+    }
+
+    fn cleanupEmptyLeaves(self: *DockManager) void {
+        _ = self.collapseEmptyChild(self.root);
+    }
+
+    fn collapseEmptyChild(self: *DockManager, id: types.DockNodeId) bool {
+        if (id == types.invalid_dock_node or id >= self.nodes.items.len) return false;
+        switch (self.nodes.items[id]) {
+            .leaf => |leaf| return leaf.tabs.items.len == 0,
+            .split => |split| {
+                const first_empty = self.collapseEmptyChild(split.first);
+                const second_empty = self.collapseEmptyChild(split.second);
+                if (first_empty and !second_empty) {
+                    self.replaceNodeWith(id, split.second);
+                    return self.collapseEmptyChild(id);
+                }
+                if (second_empty and !first_empty) {
+                    self.replaceNodeWith(id, split.first);
+                    return self.collapseEmptyChild(id);
+                }
+                return first_empty and second_empty;
+            },
+        }
+    }
+
+    fn replaceNodeWith(self: *DockManager, dst: types.DockNodeId, src: types.DockNodeId) void {
+        if (dst == types.invalid_dock_node or dst >= self.nodes.items.len) return;
+        if (src == types.invalid_dock_node or src >= self.nodes.items.len) return;
+        const moved = self.nodes.items[src];
+        self.nodes.items[src] = .{ .leaf = .{} };
+        self.nodes.items[dst] = moved;
+    }
 };
 
 fn handleRectForSplit(split: dock_node.DockSplit, thickness: f32) types.Rect {
@@ -296,6 +406,14 @@ fn majorSize(rect: types.Rect, axis: dock_node.Axis) f32 {
 fn sanitizeRatio(ratio: f32) f32 {
     if (!std.math.isFinite(ratio)) return 0.5;
     return @min(1, @max(0, ratio));
+}
+
+fn defaultDockSplitRatio(position: dock_node.DockPosition) f32 {
+    return switch (position) {
+        .left, .top => 0.25,
+        .right, .bottom => 0.75,
+        .center_tab => 0.5,
+    };
 }
 
 fn expectApprox(expected: f32, actual: f32) !void {
@@ -352,4 +470,34 @@ test "resize handle hit testing returns split under handle rect" {
 
     try std.testing.expectEqual(split.split, dock.hitTestResizeHandle(.{ .x = 25, .y = 50 }, 10).?);
     try std.testing.expect(dock.hitTestResizeHandle(.{ .x = 10, .y = 50 }, 10) == null);
+}
+
+test "redocking center leaf into right leaf preserves surrounding dock tree" {
+    var dock = try DockManager.init(std.testing.allocator);
+    defer dock.deinit();
+
+    const viewport: types.WindowId = 1;
+    const console: types.WindowId = 2;
+    const scene: types.WindowId = 3;
+    const inspector: types.WindowId = 4;
+
+    try dock.moveWindowToLeaf(viewport, dock.root);
+    const bottom = try dock.splitNode(dock.root, .bottom, 0.82);
+    try dock.moveWindowToLeaf(console, bottom.new_leaf);
+
+    const left = try dock.splitNode(bottom.old_node, .left, 0.18);
+    try dock.moveWindowToLeaf(scene, left.new_leaf);
+
+    const right = try dock.splitNode(left.old_node, .right, 0.72);
+    try dock.moveWindowToLeaf(inspector, right.new_leaf);
+
+    try dock.dockWindow(viewport, right.new_leaf, .right);
+    dock.layout(.{ .x = 0, .y = 0, .w = 1200, .h = 800 });
+
+    try std.testing.expect(dock.leafForWindow(scene) != null);
+    try std.testing.expect(dock.leafForWindow(viewport) != null);
+    try std.testing.expect(dock.leafForWindow(inspector) != null);
+    try std.testing.expect(dock.leafForWindow(console) != null);
+    try std.testing.expect((dock.nodeRect(dock.leafForWindow(viewport).?) orelse .{}).w > 0);
+    try std.testing.expect((dock.nodeRect(dock.leafForWindow(inspector).?) orelse .{}).w > 0);
 }

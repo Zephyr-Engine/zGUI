@@ -26,6 +26,7 @@ pub const window = @import("windowing/window.zig");
 pub const window_manager = @import("windowing/window_manager.zig");
 pub const dock_node = @import("docking/dock_node.zig");
 pub const dock_manager = @import("docking/dock_manager.zig");
+pub const dock_space = @import("docking/dock_space.zig");
 
 pub const widgets = @import("widgets/widgets.zig");
 
@@ -39,7 +40,9 @@ pub const invalid_node = types.invalid_node;
 
 pub const Size = style.Size;
 pub const LayoutDirection = style.LayoutDirection;
+pub const Overflow = style.Overflow;
 pub const Edges = style.Edges;
+pub const CornerRadii = style.CornerRadii;
 pub const Style = style.Style;
 pub const Theme = theme.Theme;
 pub const Palette = theme.Palette;
@@ -71,4 +74,8 @@ pub const Batcher = batcher.Batcher;
 pub const FontAtlas = font_atlas.FontAtlas;
 pub const OpenGlRenderer = opengl_renderer.OpenGlRenderer;
 pub const DockManager = dock_manager.DockManager;
+pub const DockSpace = dock_space.DockSpace;
+pub const DockSpaceOptions = dock_space.DockSpaceOptions;
+pub const DockSpaceResult = dock_space.DockSpaceResult;
+pub const DockWindowId = dock_space.DockWindowId;
 pub const CursorKind = platform_events.CursorKind;

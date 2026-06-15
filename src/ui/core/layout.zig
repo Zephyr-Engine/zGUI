@@ -6,6 +6,7 @@ const text_mod = @import("text.zig");
 
 pub const Layout = struct {
     intrinsic: types.Vec2 = .{},
+    content_size: types.Vec2 = .{},
 };
 
 const Axis = enum { x, y };
@@ -58,7 +59,21 @@ fn measureNode(tree: *tree_mod.UiTree, id: types.NodeId, text_measurer: ?text_mo
     measured.x = @max(measured.x, node.style.min_width);
     measured.y = @max(measured.y, node.style.min_height);
     node.layout.intrinsic = measured;
-    return measured;
+    node.layout.content_size = .{
+        .x = @max(0, measured.x - node.style.padding.horizontal()),
+        .y = @max(0, measured.y - node.style.padding.vertical()),
+    };
+    return .{
+        .x = preferredIntrinsicSize(node.style.width, measured.x),
+        .y = preferredIntrinsicSize(node.style.height, measured.y),
+    };
+}
+
+fn preferredIntrinsicSize(size: style_mod.Size, measured: f32) f32 {
+    return switch (size) {
+        .px => |v| v,
+        else => measured,
+    };
 }
 
 fn layoutChildren(tree: *tree_mod.UiTree, id: types.NodeId) void {
@@ -66,7 +81,9 @@ fn layoutChildren(tree: *tree_mod.UiTree, id: types.NodeId) void {
     const direction = parent.style.direction;
     const padding = parent.style.padding;
     const gap = parent.style.gap;
-    const content: types.Rect = parent.bounds.inset(padding);
+    var content: types.Rect = parent.bounds.inset(padding);
+    content.x -= scrollForAxis(parent, .x);
+    content.y -= scrollForAxis(parent, .y);
 
     switch (direction) {
         .absolute => layoutAbsolute(tree, parent.first_child, content),
@@ -182,6 +199,13 @@ fn sizeForAxis(style: style_mod.Style, axis: Axis) style_mod.Size {
     return if (axis == .x) style.width else style.height;
 }
 
+fn scrollForAxis(node: anytype, axis: Axis) f32 {
+    return switch (axis) {
+        .x => if (node.style.overflow_x == .scroll) node.scroll_offset.x else 0,
+        .y => if (node.style.overflow_y == .scroll) node.scroll_offset.y else 0,
+    };
+}
+
 test "column fill lays out remaining height" {
     var tree = tree_mod.UiTree.init(std.testing.allocator);
     defer tree.deinit();
@@ -198,4 +222,62 @@ test "column fill lays out remaining height" {
     layoutTree(&tree, root, .{ .x = 100, .y = 80 }, null);
     try std.testing.expectEqual(@as(f32, 20), tree.get(top).?.bounds.h);
     try std.testing.expectEqual(@as(f32, 60), tree.get(fill).?.bounds.h);
+}
+
+test "hug column measures explicit child heights" {
+    var tree = tree_mod.UiTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const root = try tree.createNode(.root);
+    const card = try tree.createNode(.panel);
+    const row_a = try tree.createNode(.panel);
+    const row_b = try tree.createNode(.panel);
+
+    tree.get(root).?.style = .{ .width = .fill, .height = .fill };
+    tree.get(card).?.style = .{
+        .width = .fill,
+        .height = .hug,
+        .padding = .{ .top = 8, .bottom = 8 },
+        .gap = 6,
+        .direction = .column,
+    };
+    tree.get(row_a).?.style = .{ .width = .fill, .height = .{ .px = 28 } };
+    tree.get(row_b).?.style = .{ .width = .fill, .height = .{ .px = 28 } };
+
+    try tree.appendChild(root, card);
+    try tree.appendChild(card, row_a);
+    try tree.appendChild(card, row_b);
+
+    layoutTree(&tree, root, .{ .x = 100, .y = 100 }, null);
+    try std.testing.expectEqual(@as(f32, 78), tree.get(card).?.bounds.h);
+    try std.testing.expectEqual(@as(f32, 28), tree.get(row_a).?.bounds.h);
+    try std.testing.expectEqual(@as(f32, 28), tree.get(row_b).?.bounds.h);
+}
+
+test "scroll offset shifts children without moving container" {
+    var tree = tree_mod.UiTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const root = try tree.createNode(.root);
+    const scroller = try tree.createNode(.panel);
+    const child = try tree.createNode(.panel);
+
+    tree.get(root).?.style = .{ .width = .fill, .height = .fill };
+    tree.get(scroller).?.style = .{
+        .width = .fill,
+        .height = .fill,
+        .overflow_x = .scroll,
+        .overflow_y = .scroll,
+    };
+    tree.get(scroller).?.scroll_offset = .{ .x = 12, .y = 18 };
+    tree.get(child).?.style = .{ .width = .{ .px = 160 }, .height = .{ .px = 140 } };
+
+    try tree.appendChild(root, scroller);
+    try tree.appendChild(scroller, child);
+
+    layoutTree(&tree, root, .{ .x = 100, .y = 80 }, null);
+    try std.testing.expectEqual(@as(f32, 0), tree.get(scroller).?.bounds.x);
+    try std.testing.expectEqual(@as(f32, 0), tree.get(scroller).?.bounds.y);
+    try std.testing.expectEqual(@as(f32, -12), tree.get(child).?.bounds.x);
+    try std.testing.expectEqual(@as(f32, -18), tree.get(child).?.bounds.y);
 }
