@@ -1,5 +1,5 @@
 const std = @import("std");
-const ui = @import("zGUI_retained");
+const ui = @import("zGUI");
 
 const toolbar_height: f32 = 44;
 const main_padding: f32 = 8;

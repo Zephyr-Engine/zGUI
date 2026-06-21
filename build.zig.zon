@@ -1,7 +1,7 @@
 .{
-    .name = .zGUI_retained,
+    .name = .zGUI,
     .version = "0.0.0",
-    .fingerprint = 0x58a1517130eb1a20, // Changing this has security and trust implications.
+    .fingerprint = 0x98df5484918a3b2c, // Changing this has security and trust implications.
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zig_glad = .{
