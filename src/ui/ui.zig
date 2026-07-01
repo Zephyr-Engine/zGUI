@@ -59,6 +59,7 @@ pub const UiTree = tree.UiTree;
 pub const Ui = app.Ui;
 pub const BeginFrame = app.BeginFrame;
 pub const UiStats = app.UiStats;
+pub const InputCapture = app.InputCapture;
 
 pub const PlatformEvent = platform_events.PlatformEvent;
 pub const Platform = platform.Platform;

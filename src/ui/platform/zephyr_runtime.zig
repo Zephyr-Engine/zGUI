@@ -8,6 +8,12 @@ pub const PixelSize = struct {
     height: u32,
 };
 
+pub const BeginFrameInput = struct {
+    window_size: types.Vec2,
+    framebuffer_size: PixelSize,
+    dt: f32,
+};
+
 pub const Frame = struct {
     events: []const events.PlatformEvent,
     window_size: types.Vec2,
@@ -39,16 +45,13 @@ pub const Backend = struct {
         self.* = undefined;
     }
 
-    pub fn beginFrame(self: *Backend, app: anytype, runtime_events: anytype) !Frame {
-        const window_size = toUiSize(app.window.getWindowSize());
-        const framebuffer_size = toPixelSize(app.window.getFramebufferSize());
-
+    pub fn beginFrame(self: *Backend, input: BeginFrameInput, runtime_events: anytype) !Frame {
         return .{
             .events = try self.translateEvents(runtime_events),
-            .window_size = window_size,
-            .framebuffer_size = framebuffer_size,
-            .text_raster_scale = framebufferScale(window_size, framebuffer_size),
-            .dt = app.time.delta_time,
+            .window_size = input.window_size,
+            .framebuffer_size = input.framebuffer_size,
+            .text_raster_scale = framebufferScale(input.window_size, input.framebuffer_size),
+            .dt = input.dt,
         };
     }
 
@@ -100,47 +103,6 @@ pub const Backend = struct {
         return .{ .text_input = self.text_buffer.items[start .. start + len] };
     }
 };
-
-pub const SceneInputCapture = struct {
-    active: bool = false,
-
-    pub fn accepts(self: *SceneInputCapture, event: anytype, viewport_rect: types.Rect, mouse_pos: types.Vec2) bool {
-        const mouse_in_viewport = viewport_rect.contains(mouse_pos);
-        return switch (event) {
-            .MouseMove => true,
-            .MousePressed => pressed: {
-                if (mouse_in_viewport) {
-                    self.active = true;
-                    break :pressed true;
-                }
-                break :pressed false;
-            },
-            .MouseReleased => released: {
-                const was_active = self.active;
-                self.active = false;
-                break :released was_active or mouse_in_viewport;
-            },
-            .MouseScroll => self.active or mouse_in_viewport,
-            .KeyPressed, .KeyReleased, .KeyRepeated => self.active or mouse_in_viewport,
-            .WindowResize, .FramebufferResize, .ContentScaleChange, .WindowClose => true,
-            .CharInput => false,
-        };
-    }
-};
-
-pub fn processSceneEvents(
-    app: anytype,
-    runtime_events: anytype,
-    viewport_rect: types.Rect,
-    mouse_pos: types.Vec2,
-    capture: *SceneInputCapture,
-) !void {
-    for (runtime_events) |event| {
-        if (capture.accepts(event, viewport_rect, mouse_pos)) {
-            try app.processEvent(event);
-        }
-    }
-}
 
 pub fn setCursor(window: anytype, cursor: events.CursorKind) void {
     switch (cursor) {

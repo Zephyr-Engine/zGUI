@@ -31,6 +31,12 @@ pub const UiStats = struct {
     frame_alloc_count: u32 = 0,
 };
 
+pub const InputCapture = struct {
+    wants_mouse: bool = false,
+    wants_keyboard: bool = false,
+    wants_text_input: bool = false,
+};
+
 pub const Ui = struct {
     allocator: std.mem.Allocator,
     tree: tree_mod.UiTree,
@@ -132,6 +138,15 @@ pub const Ui = struct {
 
     pub fn requestedCursor(self: *const Ui) platform_events.CursorKind {
         return self.requested_cursor;
+    }
+
+    pub fn inputCapture(self: *const Ui) InputCapture {
+        return .{
+            .wants_mouse = self.input.hovered != types.invalid_node or self.input.active != types.invalid_node,
+            .wants_keyboard = self.input.focused != types.invalid_node,
+            // zGUI does not yet have text-edit widgets that capture IME/text input.
+            .wants_text_input = false,
+        };
     }
 
     pub fn processPlatformEvent(self: *Ui, event: platform_events.PlatformEvent) void {
