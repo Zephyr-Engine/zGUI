@@ -14,6 +14,9 @@ pub const WindowManager = struct {
     }
 
     pub fn deinit(self: *WindowManager) void {
+        for (self.windows.items) |*window| {
+            if (window.open) self.allocator.free(window.title);
+        }
         self.windows.deinit(self.allocator);
         self.free_list.deinit(self.allocator);
         self.* = undefined;
@@ -26,6 +29,9 @@ pub const WindowManager = struct {
         root_node: types.NodeId,
         flags: window_mod.WindowFlags,
     ) !types.WindowId {
+        const owned_title = try self.allocator.dupe(u8, title);
+        errdefer self.allocator.free(owned_title);
+
         const id = self.free_list.pop() orelse blk: {
             const next: types.WindowId = @intCast(self.windows.items.len);
             try self.windows.append(self.allocator, undefined);
@@ -34,7 +40,7 @@ pub const WindowManager = struct {
 
         self.windows.items[id] = .{
             .id = id,
-            .title = title,
+            .title = owned_title,
             .rect = rect,
             .root_node = root_node,
             .flags = flags,
@@ -46,6 +52,8 @@ pub const WindowManager = struct {
 
     pub fn closeWindow(self: *WindowManager, id: types.WindowId) void {
         const window = self.get(id) orelse return;
+        self.allocator.free(window.title);
+        window.title = &.{};
         window.open = false;
         self.free_list.append(self.allocator, id) catch {};
         if (self.focused == id) self.focused = types.invalid_window;

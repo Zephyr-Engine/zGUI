@@ -17,12 +17,30 @@ pub fn build(b: *std.Build) void {
     const mod = b.addModule("zGUI", .{
         .root_source_file = b.path("src/ui/ui.zig"),
         .target = target,
+        .optimize = optimize,
     });
     mod.addIncludePath(b.path("third_party/stb"));
     mod.addCSourceFile(.{ .file = b.path("src/ui/render/stb_truetype_impl.c") });
     mod.linkSystemLibrary("c", .{});
     mod.linkLibrary(glfw_dep.artifact("glfw"));
     mod.linkLibrary(glad_dep.artifact("glad"));
+
+    const demo = b.addExecutable(.{
+        .name = "editor_demo",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/editor_demo.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zGUI", .module = mod },
+            },
+        }),
+    });
+    b.installArtifact(demo);
+
+    const run_demo = b.addRunArtifact(demo);
+    const run_step = b.step("run", "Run the editor demo");
+    run_step.dependOn(&run_demo.step);
 
     const mod_tests = b.addTest(.{
         .root_module = mod,

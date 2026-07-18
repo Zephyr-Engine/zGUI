@@ -85,7 +85,25 @@ pub const GlfwPlatform = struct {
         self.events.clearRetainingCapacity();
         self.text_buffer.clearRetainingCapacity();
         c.glfwPollEvents();
+        self.repairTextSlices();
         return self.events.items;
+    }
+
+    /// Re-points text_input slices at the final text_buffer storage. The
+    /// callbacks append to text_buffer as chars arrive, and a growth
+    /// reallocation would leave earlier event slices dangling; the lengths
+    /// stay valid, so the slices can be rebuilt in order after polling.
+    fn repairTextSlices(self: *GlfwPlatform) void {
+        var offset: usize = 0;
+        for (self.events.items) |*event| {
+            switch (event.*) {
+                .text_input => |text| {
+                    event.* = .{ .text_input = self.text_buffer.items[offset .. offset + text.len] };
+                    offset += text.len;
+                },
+                else => {},
+            }
+        }
     }
 
     pub fn getWindowSize(self: *GlfwPlatform) types.Vec2 {

@@ -11,6 +11,12 @@ pub const GlyphKey = struct {
     px_size: u16,
 };
 
+const KernKey = struct {
+    left: u21,
+    right: u21,
+    px_size: u16,
+};
+
 pub const DirtyRect = struct {
     x: u32,
     y: u32,
@@ -41,12 +47,18 @@ pub const FontAtlas = struct {
     height: u32,
     texture_id: u32 = 0,
     glyphs: std.AutoHashMap(GlyphKey, Glyph),
+    advances: std.AutoHashMap(GlyphKey, f32),
+    kern_pairs: std.AutoHashMap(KernKey, f32),
+    ascent: c_int = 0,
+    descent: c_int = 0,
+    line_gap: c_int = 0,
     shelf_x: u32 = 1,
     shelf_y: u32 = 1,
     shelf_height: u32 = 0,
     dirty: bool = true,
     full_upload: bool = true,
     dirty_rect: ?DirtyRect = null,
+    warned_full: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, font_bytes: []const u8, atlas_width: u32, atlas_height: u32) !FontAtlas {
         if (atlas_width == 0 or atlas_height == 0) return error.InvalidAtlasSize;
@@ -58,6 +70,11 @@ pub const FontAtlas = struct {
         const offset = c.stbtt_GetFontOffsetForIndex(owned_font.ptr, 0);
         if (offset < 0) return error.InvalidFont;
         if (c.stbtt_InitFont(&info, owned_font.ptr, offset) == 0) return error.InvalidFont;
+
+        var ascent: c_int = 0;
+        var descent: c_int = 0;
+        var line_gap: c_int = 0;
+        c.stbtt_GetFontVMetrics(&info, &ascent, &descent, &line_gap);
 
         const pixel_count = try std.math.mul(usize, @intCast(atlas_width), @intCast(atlas_height));
         const byte_count = try std.math.mul(usize, pixel_count, 4);
@@ -73,18 +90,25 @@ pub const FontAtlas = struct {
             .width = atlas_width,
             .height = atlas_height,
             .glyphs = std.AutoHashMap(GlyphKey, Glyph).init(allocator),
+            .advances = std.AutoHashMap(GlyphKey, f32).init(allocator),
+            .kern_pairs = std.AutoHashMap(KernKey, f32).init(allocator),
+            .ascent = ascent,
+            .descent = descent,
+            .line_gap = line_gap,
             .dirty_rect = .{ .x = 0, .y = 0, .w = atlas_width, .h = atlas_height },
         };
     }
 
     pub fn deinit(self: *FontAtlas) void {
+        self.kern_pairs.deinit();
+        self.advances.deinit();
         self.glyphs.deinit();
         self.allocator.free(self.pixels);
         self.allocator.free(self.font_bytes);
         self.* = undefined;
     }
 
-    pub fn measure(self: *const FontAtlas, bytes: []const u8, size: f32) text_mod.TextMetrics {
+    pub fn measure(self: *FontAtlas, bytes: []const u8, size: f32) text_mod.TextMetrics {
         const line_height = self.lineHeight(size);
         var current_width: f32 = 0;
         var max_width: f32 = 0;
@@ -107,7 +131,7 @@ pub const FontAtlas = struct {
                 else => {
                     const codepoint = self.renderableCodepoint(raw_codepoint);
                     if (previous) |left| current_width += self.kerning(left, codepoint, size);
-                    current_width += self.advanceForCodepoint(codepoint, size);
+                    current_width += self.cachedAdvance(codepoint, size);
                     previous = codepoint;
                 },
             }
@@ -146,12 +170,12 @@ pub const FontAtlas = struct {
         return self.lineHeight(@floatFromInt(quantizeSize(size * safe_scale))) / safe_scale;
     }
 
-    pub fn spaceAdvanceScaled(self: *const FontAtlas, size: f32, raster_scale: f32) f32 {
+    pub fn spaceAdvanceScaled(self: *FontAtlas, size: f32, raster_scale: f32) f32 {
         const safe_scale = sanitizeRasterScale(raster_scale);
         return self.spaceAdvance(@floatFromInt(quantizeSize(size * safe_scale))) / safe_scale;
     }
 
-    pub fn kerningScaled(self: *const FontAtlas, left: u21, right: u21, size: f32, raster_scale: f32) f32 {
+    pub fn kerningScaled(self: *FontAtlas, left: u21, right: u21, size: f32, raster_scale: f32) f32 {
         const safe_scale = sanitizeRasterScale(raster_scale);
         return self.kerning(left, right, @floatFromInt(quantizeSize(size * safe_scale))) / safe_scale;
     }
@@ -163,6 +187,10 @@ pub const FontAtlas = struct {
 
         const glyph = self.createGlyph(key) catch |err| switch (err) {
             error.AtlasFull => {
+                if (!self.warned_full) {
+                    self.warned_full = true;
+                    std.log.warn("font atlas is full ({d}x{d}); further new glyphs render as '?'", .{ self.width, self.height });
+                }
                 if (resolved != '?') return self.getGlyphForPixelSize('?', px_size);
                 return emptyGlyph(key, self.advanceForCodepoint('?', @floatFromInt(px_size)));
             },
@@ -178,22 +206,30 @@ pub const FontAtlas = struct {
 
     pub fn lineHeight(self: *const FontAtlas, size: f32) f32 {
         const scale = self.scaleForSize(size);
-        var ascent: c_int = 0;
-        var descent: c_int = 0;
-        var line_gap: c_int = 0;
-        c.stbtt_GetFontVMetrics(&self.font_info, &ascent, &descent, &line_gap);
-        const height = @as(f32, @floatFromInt(ascent - descent + line_gap)) * scale;
+        const height = @as(f32, @floatFromInt(self.ascent - self.descent + self.line_gap)) * scale;
         return if (height > 0) height else size * 1.25;
     }
 
-    pub fn spaceAdvance(self: *const FontAtlas, size: f32) f32 {
-        return self.advanceForCodepoint(' ', size);
+    pub fn spaceAdvance(self: *FontAtlas, size: f32) f32 {
+        return self.cachedAdvance(' ', size);
     }
 
-    pub fn kerning(self: *const FontAtlas, left: u21, right: u21, size: f32) f32 {
+    pub fn kerning(self: *FontAtlas, left: u21, right: u21, size: f32) f32 {
+        const key: KernKey = .{ .left = left, .right = right, .px_size = quantizeSize(size) };
+        if (self.kern_pairs.get(key)) |kern| return kern;
         const scale = self.scaleForSize(size);
         const kern = c.stbtt_GetCodepointKernAdvance(&self.font_info, @intCast(left), @intCast(right));
-        return @as(f32, @floatFromInt(kern)) * scale;
+        const scaled = @as(f32, @floatFromInt(kern)) * scale;
+        self.kern_pairs.put(key, scaled) catch {};
+        return scaled;
+    }
+
+    fn cachedAdvance(self: *FontAtlas, codepoint: u21, size: f32) f32 {
+        const key: GlyphKey = .{ .codepoint = codepoint, .px_size = quantizeSize(size) };
+        if (self.advances.get(key)) |advance| return advance;
+        const advance = self.advanceForCodepoint(codepoint, size);
+        self.advances.put(key, advance) catch {};
+        return advance;
     }
 
     pub fn markClean(self: *FontAtlas) void {
@@ -324,8 +360,12 @@ pub const FontAtlas = struct {
     }
 
     fn scaleForSize(self: *const FontAtlas, size: f32) f32 {
+        // Same computation as stbtt_ScaleForPixelHeight, using the vmetrics
+        // cached at init.
         const px_size = quantizeSize(size);
-        return c.stbtt_ScaleForPixelHeight(&self.font_info, @floatFromInt(px_size));
+        const extent = self.ascent - self.descent;
+        if (extent <= 0) return 0;
+        return @as(f32, @floatFromInt(px_size)) / @as(f32, @floatFromInt(extent));
     }
 
     fn measureErased(ptr: *anyopaque, bytes: []const u8, size: f32) text_mod.TextMetrics {

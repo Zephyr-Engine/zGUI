@@ -5,6 +5,10 @@ const dock_node = @import("dock_node.zig");
 pub const DockManager = struct {
     allocator: std.mem.Allocator,
     nodes: std.ArrayList(dock_node.DockNode) = .empty,
+    // Slots vacated by collapsed splits, reused by appendNode so the nodes
+    // array stays bounded under repeated dock/undock. DockNodeIds are bare
+    // indices: ids for collapsed nodes must not be held across mutations.
+    free_list: std.ArrayList(types.DockNodeId) = .empty,
     root: types.DockNodeId = types.invalid_dock_node,
     active_resize: ?ResizeState = null,
 
@@ -29,6 +33,7 @@ pub const DockManager = struct {
     pub fn deinit(self: *DockManager) void {
         for (self.nodes.items) |*node| node.deinit(self.allocator);
         self.nodes.deinit(self.allocator);
+        self.free_list.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -284,9 +289,28 @@ pub const DockManager = struct {
     }
 
     fn appendNode(self: *DockManager, node: dock_node.DockNode) !types.DockNodeId {
+        if (self.free_list.pop()) |id| {
+            self.nodes.items[id] = node;
+            return id;
+        }
         const id: types.DockNodeId = @intCast(self.nodes.items.len);
         try self.nodes.append(self.allocator, node);
         return id;
+    }
+
+    /// Recycles a subtree that is no longer reachable from the root,
+    /// releasing tab storage and returning every slot to the free list.
+    fn releaseSubtree(self: *DockManager, id: types.DockNodeId) void {
+        if (id == types.invalid_dock_node or id >= self.nodes.items.len) return;
+        switch (self.nodes.items[id]) {
+            .leaf => |*leaf| leaf.tabs.deinit(self.allocator),
+            .split => |split| {
+                self.releaseSubtree(split.first);
+                self.releaseSubtree(split.second);
+            },
+        }
+        self.nodes.items[id] = .{ .leaf = .{} };
+        self.free_list.append(self.allocator, id) catch {};
     }
 
     fn splitPtr(self: *DockManager, id: types.DockNodeId) ?*dock_node.DockSplit {
@@ -343,10 +367,12 @@ pub const DockManager = struct {
                 const second_empty = self.collapseEmptyChild(split.second);
                 if (first_empty and !second_empty) {
                     self.replaceNodeWith(id, split.second);
+                    self.releaseSubtree(split.first);
                     return self.collapseEmptyChild(id);
                 }
                 if (second_empty and !first_empty) {
                     self.replaceNodeWith(id, split.first);
+                    self.releaseSubtree(split.second);
                     return self.collapseEmptyChild(id);
                 }
                 return first_empty and second_empty;
@@ -360,6 +386,8 @@ pub const DockManager = struct {
         const moved = self.nodes.items[src];
         self.nodes.items[src] = .{ .leaf = .{} };
         self.nodes.items[dst] = moved;
+        // The src slot's content now lives at dst; recycle the vacated slot.
+        self.free_list.append(self.allocator, src) catch {};
     }
 };
 
@@ -470,6 +498,28 @@ test "resize handle hit testing returns split under handle rect" {
 
     try std.testing.expectEqual(split.split, dock.hitTestResizeHandle(.{ .x = 25, .y = 50 }, 10).?);
     try std.testing.expect(dock.hitTestResizeHandle(.{ .x = 10, .y = 50 }, 10) == null);
+}
+
+test "repeated dock and undock reuses node slots" {
+    var dock = try DockManager.init(std.testing.allocator);
+    defer dock.deinit();
+
+    const a: types.WindowId = 1;
+    const b: types.WindowId = 2;
+    try dock.moveWindowToLeaf(a, dock.root);
+
+    try dock.dockWindow(b, dock.root, .right);
+    const baseline = dock.nodes.items.len;
+
+    var i: usize = 0;
+    while (i < 50) : (i += 1) {
+        try dock.undockWindow(b);
+        try dock.dockWindow(b, dock.leafForWindow(a).?, .right);
+    }
+
+    try std.testing.expectEqual(baseline, dock.nodes.items.len);
+    try std.testing.expect(dock.leafForWindow(a) != null);
+    try std.testing.expect(dock.leafForWindow(b) != null);
 }
 
 test "redocking center leaf into right leaf preserves surrounding dock tree" {

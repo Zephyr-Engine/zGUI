@@ -6,8 +6,8 @@ pub fn label(ui: *app.Ui, parent: types.NodeId, text: []const u8, style: style_m
     const id = try ui.tree.createNode(.label);
     const node = ui.tree.get(id).?;
     node.style = style;
-    node.text = text;
     node.flags.visible = true;
+    try ui.tree.setText(id, text);
     try ui.tree.appendChild(parent, id);
     return id;
 }

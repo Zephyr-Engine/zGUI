@@ -23,11 +23,17 @@ fn measureNode(tree: *tree_mod.UiTree, id: types.NodeId, text_measurer: ?text_mo
     var measured: types.Vec2 = .{};
 
     if (node.text) |bytes| {
-        const metrics = if (text_measurer) |measurer|
-            measurer.measure(bytes, node.style.font_size)
-        else
-            text_mod.measureFallback(bytes, node.style.font_size);
-        measured = metrics.size;
+        if (!node.dirty.text and node.measured_text_font_size == node.style.font_size) {
+            measured = node.measured_text;
+        } else {
+            const metrics = if (text_measurer) |measurer|
+                measurer.measure(bytes, node.style.font_size)
+            else
+                text_mod.measureFallback(bytes, node.style.font_size);
+            measured = metrics.size;
+            node.measured_text = metrics.size;
+            node.measured_text_font_size = node.style.font_size;
+        }
     }
 
     var child = node.first_child;
@@ -121,11 +127,13 @@ fn layoutLinear(tree: *tree_mod.UiTree, first_child: types.NodeId, content: type
         const child_node = tree.get(child) orelse break;
         child_count += 1;
         const margin_major = if (axis == .x) child_node.style.margin.horizontal() else child_node.style.margin.vertical();
+        const min_major = if (axis == .x) child_node.style.min_width else child_node.style.min_height;
         if (sizeForAxis(child_node.style, axis) == .fill) {
             fill_count += 1;
             fixed_major += margin_major;
         } else {
-            fixed_major += resolveSize(sizeForAxis(child_node.style, axis), axis, content, child_node.layout.intrinsic) + margin_major;
+            const resolved = resolveSize(sizeForAxis(child_node.style, axis), axis, content, child_node.layout.intrinsic);
+            fixed_major += @max(resolved, min_major) + margin_major;
         }
         child = child_node.next_sibling;
     }
@@ -222,6 +230,25 @@ test "column fill lays out remaining height" {
     layoutTree(&tree, root, .{ .x = 100, .y = 80 }, null);
     try std.testing.expectEqual(@as(f32, 20), tree.get(top).?.bounds.h);
     try std.testing.expectEqual(@as(f32, 60), tree.get(fill).?.bounds.h);
+}
+
+test "min sizes are respected when distributing fill space" {
+    var tree = tree_mod.UiTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const root = try tree.createNode(.root);
+    const fixed = try tree.createNode(.panel);
+    const fill = try tree.createNode(.panel);
+    tree.get(root).?.style = .{ .width = .fill, .height = .fill, .direction = .row };
+    tree.get(fixed).?.style = .{ .width = .{ .px = 50 }, .min_width = 80, .height = .fill };
+    tree.get(fill).?.style = .{ .width = .fill, .height = .fill };
+    try tree.appendChild(root, fixed);
+    try tree.appendChild(root, fill);
+
+    layoutTree(&tree, root, .{ .x = 200, .y = 100 }, null);
+    try std.testing.expectEqual(@as(f32, 80), tree.get(fixed).?.bounds.w);
+    try std.testing.expectEqual(@as(f32, 120), tree.get(fill).?.bounds.w);
+    try std.testing.expectEqual(@as(f32, 80), tree.get(fill).?.bounds.x);
 }
 
 test "hug column measures explicit child heights" {

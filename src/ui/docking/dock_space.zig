@@ -30,20 +30,27 @@ pub const DockSpaceResult = struct {
     }
 };
 
+const tab_nominal_width: f32 = 116;
+const tab_min_width: f32 = 40;
+const floating_title_height: f32 = 30;
+
 const LeafNodes = struct {
     host: types.NodeId = types.invalid_node,
     tab_bar: types.NodeId = types.invalid_node,
     content: types.NodeId = types.invalid_node,
+    last_sync: u32 = 0,
 };
 
 const SplitNodes = struct {
     handle: types.NodeId = types.invalid_node,
+    last_sync: u32 = 0,
 };
 
 const FloatingNodes = struct {
     host: types.NodeId = types.invalid_node,
     title: types.NodeId = types.invalid_node,
     content: types.NodeId = types.invalid_node,
+    last_sync: u32 = 0,
 };
 
 const OverlayNodes = struct {
@@ -56,6 +63,7 @@ const WindowState = struct {
     content_rect: types.Rect = .{},
     tab: types.NodeId = types.invalid_node,
     tab_label: types.NodeId = types.invalid_node,
+    last_sync: u32 = 0,
 };
 
 const DragState = struct {
@@ -84,6 +92,12 @@ pub const DockSpace = struct {
     window_state: std.ArrayList(WindowState) = .empty,
     overlays: OverlayNodes = .{},
     drag: ?DragState = null,
+    // Frame counter used to detect support nodes that were not touched by
+    // the current sync pass; those get hidden without a hide/show round trip
+    // that would dirty the tree every frame.
+    sync_stamp: u32 = 0,
+    order_scratch: std.ArrayList(types.NodeId) = .empty,
+    float_scratch: std.ArrayList(DockWindowId) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) !DockSpace {
         return .{
@@ -94,6 +108,8 @@ pub const DockSpace = struct {
     }
 
     pub fn deinit(self: *DockSpace) void {
+        self.float_scratch.deinit(self.allocator);
+        self.order_scratch.deinit(self.allocator);
         self.window_state.deinit(self.allocator);
         self.floating_nodes.deinit(self.allocator);
         self.split_nodes.deinit(self.allocator);
@@ -144,6 +160,7 @@ pub const DockSpace = struct {
     }
 
     pub fn run(self: *DockSpace, ui: *app.Ui, parent: types.NodeId, options: DockSpaceOptions) !DockSpaceResult {
+        self.sync_stamp +%= 1;
         try self.ensureNodeCapacity(ui, parent);
         self.dock.layout(options.rect);
 
@@ -153,9 +170,10 @@ pub const DockSpace = struct {
         try self.ensureNodeCapacity(ui, parent);
         try self.ensureOverlayNodes(ui, parent);
 
-        self.hideDockSupportNodes(ui);
         self.syncDockNode(ui, parent, self.dock.root, options);
         try self.syncFloatingNodes(ui, parent, options);
+        self.hideStaleNodes(ui);
+        try self.applyPaintOrder(ui, parent);
         self.syncDragFeedback(ui, parent, options);
 
         if (self.dock.hitTestResizeHandle(ui.input.mouse_pos, options.handle_thickness)) |split| {
@@ -271,19 +289,73 @@ pub const DockSpace = struct {
         }
     }
 
-    fn hideDockSupportNodes(self: *DockSpace, ui: *app.Ui) void {
+    /// Hides every support node the current sync pass did not touch:
+    /// leaves/splits collapsed out of the dock tree, tabs of windows that
+    /// left their leaf (including newly floating ones), and floating chrome
+    /// of windows that were docked.
+    fn hideStaleNodes(self: *DockSpace, ui: *app.Ui) void {
         for (self.leaf_nodes.items) |nodes| {
+            if (nodes.last_sync == self.sync_stamp) continue;
             hideNode(ui, nodes.host);
             hideNode(ui, nodes.tab_bar);
             hideNode(ui, nodes.content);
         }
         for (self.split_nodes.items) |nodes| {
+            if (nodes.last_sync == self.sync_stamp) continue;
             hideNode(ui, nodes.handle);
+        }
+        for (self.floating_nodes.items) |nodes| {
+            if (nodes.last_sync == self.sync_stamp) continue;
+            hideNode(ui, nodes.host);
+            hideNode(ui, nodes.title);
+            hideNode(ui, nodes.content);
+        }
+        for (self.window_state.items) |state| {
+            if (state.last_sync == self.sync_stamp) continue;
+            hideNode(ui, state.tab);
+        }
+    }
+
+    /// Keeps overlay chrome painting in the right order: split handles above
+    /// panels, floating windows above the docked layout in ascending z-index,
+    /// and drag overlays on top. Re-appends only when the order is wrong, so
+    /// the steady state leaves the tree untouched.
+    fn applyPaintOrder(self: *DockSpace, ui: *app.Ui, parent: types.NodeId) !void {
+        self.order_scratch.clearRetainingCapacity();
+        try self.collectSplitHandles(self.dock.root);
+
+        self.float_scratch.clearRetainingCapacity();
+        for (self.windows.windows.items, 0..) |*window, i| {
+            const window_id: DockWindowId = @intCast(i);
+            if (!window.open or self.dock.leafForWindow(window_id) != null) continue;
+            if (window_id >= self.floating_nodes.items.len) continue;
+            try self.float_scratch.append(self.allocator, window_id);
+        }
+        std.mem.sort(DockWindowId, self.float_scratch.items, @as(*const window_manager_mod.WindowManager, &self.windows), floatZLessThan);
+        for (self.float_scratch.items) |window_id| {
+            try self.order_scratch.append(self.allocator, self.floating_nodes.items[window_id].host);
+        }
+
+        try self.order_scratch.append(self.allocator, self.overlays.drop_preview);
+        try self.order_scratch.append(self.allocator, self.overlays.drag_ghost);
+        ensureTailOrder(ui, parent, self.order_scratch.items);
+    }
+
+    fn collectSplitHandles(self: *DockSpace, id: types.DockNodeId) !void {
+        if (id == types.invalid_dock_node or id >= self.dock.nodes.items.len) return;
+        switch (self.dock.nodes.items[id]) {
+            .leaf => {},
+            .split => |split| {
+                try self.order_scratch.append(self.allocator, self.split_nodes.items[id].handle);
+                try self.collectSplitHandles(split.first);
+                try self.collectSplitHandles(split.second);
+            },
         }
     }
 
     fn syncLeaf(self: *DockSpace, ui: *app.Ui, parent: types.NodeId, id: types.DockNodeId, leaf: anytype, options: DockSpaceOptions) void {
         const parent_origin = nodeOrigin(ui, parent);
+        self.leaf_nodes.items[id].last_sync = self.sync_stamp;
         const nodes = self.leaf_nodes.items[id];
         const active = if (leaf.tabs.items.len == 0) null else leaf.tabs.items[@min(leaf.active_tab, leaf.tabs.items.len - 1)];
         setPanel(ui, nodes.host, leaf.rect, parent_origin, .panel, false);
@@ -299,14 +371,10 @@ pub const DockSpace = struct {
         for (leaf.tabs.items, 0..) |window_id, tab_index| {
             if (self.windows.get(window_id)) |window| {
                 self.ensureWindowTab(ui, nodes.tab_bar, window_id) catch {};
-                const tab_rect: types.Rect = .{
-                    .x = leaf.rect.x + @as(f32, @floatFromInt(tab_index)) * 116,
-                    .y = leaf.rect.y,
-                    .w = @min(116, @max(40, leaf.rect.w)),
-                    .h = options.tab_height,
-                };
+                const tab_rect = tabRect(leaf.rect, tab_index, leaf.tabs.items.len, options.tab_height);
                 const is_active = active != null and active.? == window_id;
                 if (window_id < self.window_state.items.len) {
+                    self.window_state.items[window_id].last_sync = self.sync_stamp;
                     const tab = self.window_state.items[window_id].tab;
                     const label = self.window_state.items[window_id].tab_label;
                     const is_hovered = tab_rect.contains(ui.input.mouse_pos);
@@ -335,6 +403,7 @@ pub const DockSpace = struct {
 
     fn syncSplit(self: *DockSpace, ui: *app.Ui, parent: types.NodeId, id: types.DockNodeId, split: anytype, options: DockSpaceOptions) void {
         const parent_origin = nodeOrigin(ui, parent);
+        self.split_nodes.items[id].last_sync = self.sync_stamp;
         const nodes = self.split_nodes.items[id];
         const hit_rect = self.dock.resizeHandleRect(id, options.handle_thickness) orelse return;
         const active = if (self.dock.activeResizeSplit()) |active_split| active_split == id else false;
@@ -343,7 +412,6 @@ pub const DockSpace = struct {
             resizeHandleVisualRect(hit_rect, split.axis, options.handle_thickness)
         else
             hit_rect;
-        ui.tree.appendChild(parent, nodes.handle) catch {};
         setPanel(ui, nodes.handle, visual_rect, parent_origin, if (active or hovered) .accent else .transparent, true);
     }
 
@@ -354,14 +422,20 @@ pub const DockSpace = struct {
             const window_id: DockWindowId = @intCast(i);
             if (!window.open or self.dock.leafForWindow(window_id) != null) continue;
             try self.ensureFloatingCapacity(ui, parent, window_id + 1);
+            self.floating_nodes.items[window_id].last_sync = self.sync_stamp;
             const nodes = self.floating_nodes.items[window_id];
             if (window.rect.w <= 0 or window.rect.h <= 0) {
                 window.rect.w = @max(260, window.min_size.x);
                 window.rect.h = @max(190, window.min_size.y);
             }
             setPanel(ui, nodes.host, window.rect, parent_origin, .panel, false);
-            setPanel(ui, nodes.title, .{ .x = window.rect.x, .y = window.rect.y, .w = window.rect.w, .h = 30 }, .{ .x = window.rect.x, .y = window.rect.y }, .shell, true);
-            const content_rect: types.Rect = .{ .x = window.rect.x, .y = window.rect.y + 30, .w = window.rect.w, .h = @max(0, window.rect.h - 30) };
+            setPanel(ui, nodes.title, .{ .x = window.rect.x, .y = window.rect.y, .w = window.rect.w, .h = floating_title_height }, .{ .x = window.rect.x, .y = window.rect.y }, .shell, true);
+            const content_rect: types.Rect = .{
+                .x = window.rect.x,
+                .y = window.rect.y + floating_title_height,
+                .w = window.rect.w,
+                .h = @max(0, window.rect.h - floating_title_height),
+            };
             setPanel(ui, nodes.content, content_rect, .{ .x = window.rect.x, .y = window.rect.y }, .transparent, false);
             ensureRootParent(ui, window.root_node, nodes.content);
             setContentRoot(ui, window.root_node);
@@ -375,12 +449,7 @@ pub const DockSpace = struct {
                 .leaf => |leaf| {
                     const leaf_id: types.DockNodeId = @intCast(i);
                     for (leaf.tabs.items, 0..) |window_id, tab_index| {
-                        const rect: types.Rect = .{
-                            .x = leaf.rect.x + @as(f32, @floatFromInt(tab_index)) * 116,
-                            .y = leaf.rect.y,
-                            .w = @min(116, @max(40, leaf.rect.w)),
-                            .h = options.tab_height,
-                        };
+                        const rect = tabRect(leaf.rect, tab_index, leaf.tabs.items.len, options.tab_height);
                         if (rect.contains(mouse_pos)) return .{ .leaf = leaf_id, .window = window_id };
                     }
                 },
@@ -394,7 +463,7 @@ pub const DockSpace = struct {
         for (self.windows.windows.items, 0..) |window, i| {
             const window_id: DockWindowId = @intCast(i);
             if (!window.open or self.dock.leafForWindow(window_id) != null) continue;
-            const title_rect: types.Rect = .{ .x = window.rect.x, .y = window.rect.y, .w = window.rect.w, .h = 30 };
+            const title_rect: types.Rect = .{ .x = window.rect.x, .y = window.rect.y, .w = window.rect.w, .h = floating_title_height };
             if (title_rect.contains(mouse_pos)) return window_id;
         }
         return null;
@@ -465,9 +534,6 @@ pub const DockSpace = struct {
             self.overlays.drag_label = try ui.tree.createNode(.label);
             try ui.tree.appendChild(self.overlays.drag_ghost, self.overlays.drag_label);
         }
-
-        ui.tree.appendChild(parent, self.overlays.drop_preview) catch {};
-        ui.tree.appendChild(parent, self.overlays.drag_ghost) catch {};
     }
 
     fn syncDragFeedback(self: *DockSpace, ui: *app.Ui, parent: types.NodeId, options: DockSpaceOptions) void {
@@ -537,15 +603,21 @@ fn setPanelStyled(
     radius: f32,
 ) void {
     if (ui.tree.get(id)) |node| {
-        node.style.width = .{ .px = @max(0, rect.w) };
-        node.style.height = .{ .px = @max(0, rect.h) };
-        node.style.margin = style_mod.Edges{ .left = rect.x - origin.x, .top = rect.y - origin.y };
-        node.style.background = ui.theme.color(background);
-        node.style.border_color = ui.theme.color(border);
-        node.style.border_width = border_width;
-        node.style.radius = style_mod.CornerRadii.all(radius);
-        node.style.direction = .absolute;
-        node.flags.visible = rect.w > 0 and rect.h > 0;
+        var next = node.style;
+        next.width = .{ .px = @max(0, rect.w) };
+        next.height = .{ .px = @max(0, rect.h) };
+        next.margin = style_mod.Edges{ .left = rect.x - origin.x, .top = rect.y - origin.y };
+        next.background = ui.theme.color(background);
+        next.border_color = ui.theme.color(border);
+        next.border_width = border_width;
+        next.radius = style_mod.CornerRadii.all(radius);
+        next.direction = .absolute;
+        const visible = rect.w > 0 and rect.h > 0;
+        if (std.meta.eql(node.style, next) and
+            node.flags.visible == visible and
+            node.flags.interactive == interactive) return;
+        node.style = next;
+        node.flags.visible = visible;
         node.flags.interactive = interactive;
         node.dirty.layout = true;
         node.dirty.paint = true;
@@ -554,10 +626,49 @@ fn setPanelStyled(
 
 fn hideNode(ui: *app.Ui, id: types.NodeId) void {
     if (ui.tree.get(id)) |node| {
+        if (!node.flags.visible and !node.flags.interactive) return;
         node.flags.visible = false;
         node.flags.interactive = false;
         node.dirty.layout = true;
         node.dirty.paint = true;
+    }
+}
+
+/// Rect of the tab strip entry for `tab_index` inside a leaf. Tabs shrink
+/// evenly when the nominal width would overflow the leaf and are clipped to
+/// the leaf's right edge; shared by drawing and hit testing so they always
+/// agree.
+fn tabRect(leaf_rect: types.Rect, tab_index: usize, tab_count: usize, tab_height: f32) types.Rect {
+    const count: f32 = @floatFromInt(@max(1, tab_count));
+    const width = @min(tab_nominal_width, @max(tab_min_width, leaf_rect.w / count));
+    const x = leaf_rect.x + @as(f32, @floatFromInt(tab_index)) * width;
+    const right = @min(x + width, leaf_rect.x + leaf_rect.w);
+    return .{ .x = x, .y = leaf_rect.y, .w = @max(0, right - x), .h = tab_height };
+}
+
+fn floatZLessThan(windows: *const window_manager_mod.WindowManager, a: DockWindowId, b: DockWindowId) bool {
+    const za = if (windows.getConst(a)) |window| window.z_index else 0;
+    const zb = if (windows.getConst(b)) |window| window.z_index else 0;
+    return za < zb;
+}
+
+/// Ensures `desired` are the trailing children of `parent`, in order.
+/// Re-appends (and therefore dirties the tree) only when the order differs.
+fn ensureTailOrder(ui: *app.Ui, parent: types.NodeId, desired: []const types.NodeId) void {
+    const parent_node = ui.tree.getConst(parent) orelse return;
+    var current = parent_node.last_child;
+    var i = desired.len;
+    var matches = true;
+    while (i > 0) : (i -= 1) {
+        if (current != desired[i - 1]) {
+            matches = false;
+            break;
+        }
+        current = if (ui.tree.getConst(current)) |node| node.prev_sibling else types.invalid_node;
+    }
+    if (matches) return;
+    for (desired) |id| {
+        ui.tree.appendChild(parent, id) catch {};
     }
 }
 
@@ -568,11 +679,14 @@ fn nodeOrigin(ui: *const app.Ui, id: types.NodeId) types.Vec2 {
 
 fn setContentRoot(ui: *app.Ui, id: types.NodeId) void {
     if (ui.tree.get(id)) |node| {
-        node.style.width = .fill;
-        node.style.height = .fill;
-        node.style.margin = .{};
-        node.style.overflow_x = .scroll;
-        node.style.overflow_y = .scroll;
+        var next = node.style;
+        next.width = .fill;
+        next.height = .fill;
+        next.margin = .{};
+        next.overflow_x = .scroll;
+        next.overflow_y = .scroll;
+        if (std.meta.eql(node.style, next) and node.flags.visible) return;
+        node.style = next;
         node.flags.visible = true;
         node.dirty.layout = true;
         node.dirty.paint = true;
@@ -597,13 +711,16 @@ fn resizeHandleVisualRect(rect: types.Rect, axis: dock_node.Axis, thickness: f32
 }
 
 fn setLabel(ui: *app.Ui, id: types.NodeId, text: []const u8, active: bool) void {
+    ui.tree.setText(id, text) catch {};
     if (ui.tree.get(id)) |node| {
-        node.text = text;
-        node.style.width = .fill;
-        node.style.height = .fill;
-        node.style.padding = .{ .left = 10, .right = 8, .top = 7, .bottom = 5 };
-        node.style.foreground = ui.theme.color(if (active) .text else .text_muted);
-        node.style.font_size = ui.theme.font.small;
+        var next = node.style;
+        next.width = .fill;
+        next.height = .fill;
+        next.padding = .{ .left = 10, .right = 8, .top = 7, .bottom = 5 };
+        next.foreground = ui.theme.color(if (active) .text else .text_muted);
+        next.font_size = ui.theme.font.small;
+        if (std.meta.eql(node.style, next) and node.flags.visible) return;
+        node.style = next;
         node.flags.visible = true;
         node.dirty.layout = true;
         node.dirty.paint = true;
@@ -614,7 +731,11 @@ fn ensureRootParent(ui: *app.Ui, node_id: types.NodeId, parent: types.NodeId) vo
     const node = ui.tree.get(node_id) orelse return;
     if (parent == types.invalid_node) {
         if (node.parent != types.invalid_node) ui.tree.removeChild(node.parent, node_id);
-        node.flags.visible = false;
+        if (node.flags.visible) {
+            node.flags.visible = false;
+            node.dirty.layout = true;
+            node.dirty.paint = true;
+        }
         return;
     }
     if (node.parent != parent) ui.tree.appendChild(parent, node_id) catch {};
@@ -857,6 +978,78 @@ test "dock space splits active tab from same leaf when dropped on edge" {
     try std.testing.expect(inspector_rect.x > viewport_rect.x);
     try std.testing.expect(inspector_rect.w < viewport_rect.w);
     try std.testing.expect(inspector_rect.w > 80);
+}
+
+fn siblingPosition(ui: *const app.Ui, parent: types.NodeId, id: types.NodeId) ?usize {
+    const parent_node = ui.tree.getConst(parent) orelse return null;
+    var child = parent_node.first_child;
+    var index: usize = 0;
+    while (child != types.invalid_node) : (index += 1) {
+        if (child == id) return index;
+        child = if (ui.tree.getConst(child)) |node| node.next_sibling else types.invalid_node;
+    }
+    return null;
+}
+
+test "floating windows paint in z order after bring to front" {
+    var ui_state = try app.Ui.init(std.testing.allocator);
+    defer ui_state.deinit();
+    ui_state.tree.get(ui_state.root).?.style.direction = .absolute;
+
+    const a_root = try createPanel(&ui_state, ui_state.root);
+    const b_root = try createPanel(&ui_state, ui_state.root);
+
+    var space = try DockSpace.init(std.testing.allocator);
+    defer space.deinit();
+    const a = try space.createWindow("A", a_root, .{ .x = 40, .y = 40 }, .{});
+    const b = try space.createWindow("B", b_root, .{ .x = 40, .y = 40 }, .{});
+    space.windows.get(a).?.rect = .{ .x = 20, .y = 20, .w = 200, .h = 150 };
+    space.windows.get(b).?.rect = .{ .x = 60, .y = 60, .w = 200, .h = 150 };
+
+    const opts = DockSpaceOptions{ .rect = .{ .x = 0, .y = 0, .w = 400, .h = 300 } };
+    try ui_state.beginFrame(.{ .events = &.{}, .window_size = .{ .x = 400, .y = 300 } });
+    _ = try space.run(&ui_state, ui_state.root, opts);
+
+    const a_host = space.floating_nodes.items[a].host;
+    const b_host = space.floating_nodes.items[b].host;
+    var a_pos = siblingPosition(&ui_state, ui_state.root, a_host).?;
+    var b_pos = siblingPosition(&ui_state, ui_state.root, b_host).?;
+    try std.testing.expect(a_pos < b_pos);
+
+    space.windows.bringToFront(a);
+    try ui_state.beginFrame(.{ .events = &.{}, .window_size = .{ .x = 400, .y = 300 } });
+    _ = try space.run(&ui_state, ui_state.root, opts);
+
+    a_pos = siblingPosition(&ui_state, ui_state.root, a_host).?;
+    b_pos = siblingPosition(&ui_state, ui_state.root, b_host).?;
+    try std.testing.expect(b_pos < a_pos);
+    try std.testing.expect(a_pos < siblingPosition(&ui_state, ui_state.root, space.overlays.drag_ghost).?);
+}
+
+test "docking a floating window hides its floating chrome" {
+    var ui_state = try app.Ui.init(std.testing.allocator);
+    defer ui_state.deinit();
+    ui_state.tree.get(ui_state.root).?.style.direction = .absolute;
+
+    const a_root = try createPanel(&ui_state, ui_state.root);
+    const b_root = try createPanel(&ui_state, ui_state.root);
+
+    var space = try DockSpace.init(std.testing.allocator);
+    defer space.deinit();
+    const a = try space.createWindow("A", a_root, .{ .x = 40, .y = 40 }, .{});
+    const b = try space.createWindow("B", b_root, .{ .x = 40, .y = 40 }, .{});
+    try space.dock.moveWindowToLeaf(a, space.dock.root);
+    space.windows.get(b).?.rect = .{ .x = 60, .y = 60, .w = 200, .h = 150 };
+
+    const opts = DockSpaceOptions{ .rect = .{ .x = 0, .y = 0, .w = 400, .h = 300 } };
+    try ui_state.beginFrame(.{ .events = &.{}, .window_size = .{ .x = 400, .y = 300 } });
+    _ = try space.run(&ui_state, ui_state.root, opts);
+    try std.testing.expect(ui_state.tree.get(space.floating_nodes.items[b].host).?.flags.visible);
+
+    try space.dock.dockWindow(b, space.dock.root, .center_tab);
+    try ui_state.beginFrame(.{ .events = &.{}, .window_size = .{ .x = 400, .y = 300 } });
+    _ = try space.run(&ui_state, ui_state.root, opts);
+    try std.testing.expect(!ui_state.tree.get(space.floating_nodes.items[b].host).?.flags.visible);
 }
 
 test "dock manager moving last tab cleans empty source leaf" {

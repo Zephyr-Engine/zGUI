@@ -139,10 +139,9 @@ const DemoState = struct {
     fn setHandleStyle(self: *const DemoState, app_state: *ui.Ui, handle: ui.NodeId, highlighted: bool) void {
         _ = self;
         if (app_state.tree.get(handle)) |node| {
-            node.style.background = if (highlighted)
-                active_handle_color
-            else
-                idle_handle_color;
+            const next = if (highlighted) active_handle_color else idle_handle_color;
+            if (std.meta.eql(node.style.background, next)) return;
+            node.style.background = next;
             node.dirty.paint = true;
         }
     }
@@ -209,10 +208,10 @@ pub fn main(init: std.process.Init) !void {
         }
 
         var click_buf: [64]u8 = undefined;
-        state.tree.get(demo.nodes.click_label).?.text = try std.fmt.bufPrint(&click_buf, "Clicks {d}", .{click_count});
+        try state.tree.setText(demo.nodes.click_label, try std.fmt.bufPrint(&click_buf, "Clicks {d}", .{click_count}));
 
         var stats_buf: [160]u8 = undefined;
-        state.tree.get(demo.nodes.stats_label).?.text = try std.fmt.bufPrint(
+        try state.tree.setText(demo.nodes.stats_label, try std.fmt.bufPrint(
             &stats_buf,
             "Nodes {d}  Commands {d}  Vertices {d}  Batches {d}",
             .{
@@ -221,7 +220,7 @@ pub fn main(init: std.process.Init) !void {
                 state.stats.vertex_count,
                 state.stats.batch_count,
             },
-        );
+        ));
 
         state.setTextRasterScale(text_raster_scale);
         try state.endFrame();
@@ -266,15 +265,21 @@ fn createDockTree(dock: *ui.DockManager) !DemoDockRefs {
 
 fn setNodeWidth(app_state: *ui.Ui, id: ui.NodeId, width: f32) void {
     if (app_state.tree.get(id)) |node| {
-        node.style.width = .{ .px = @max(0, width) };
+        const next: ui.Size = .{ .px = @max(0, width) };
+        if (std.meta.eql(node.style.width, next)) return;
+        node.style.width = next;
         node.dirty.layout = true;
+        node.dirty.paint = true;
     }
 }
 
 fn setNodeHeight(app_state: *ui.Ui, id: ui.NodeId, height: f32) void {
     if (app_state.tree.get(id)) |node| {
-        node.style.height = .{ .px = @max(0, height) };
+        const next: ui.Size = .{ .px = @max(0, height) };
+        if (std.meta.eql(node.style.height, next)) return;
+        node.style.height = next;
         node.dirty.layout = true;
+        node.dirty.paint = true;
     }
 }
 

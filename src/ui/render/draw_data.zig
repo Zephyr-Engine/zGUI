@@ -17,6 +17,9 @@ pub const DrawData = struct {
     vertices: []const Vertex,
     indices: []const u32,
     batches: []const DrawBatch,
+    /// Bumped whenever the geometry is rebuilt; renderers can skip re-uploading
+    /// vertex/index buffers when the generation is unchanged.
+    generation: u32 = 0,
 
     pub const empty: DrawData = .{
         .vertices = &.{},

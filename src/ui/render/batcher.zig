@@ -8,9 +8,11 @@ const font_atlas_mod = @import("font_atlas.zig");
 
 const white_texture_id: u32 = 0;
 const default_clip: types.Rect = .{ .x = 0, .y = 0, .w = 100000, .h = 100000 };
-const rounded_corner_segments: usize = 10;
-const rounded_point_count: usize = 4 * (rounded_corner_segments + 1);
+const max_corner_segments: usize = 10;
+const rounded_point_count: usize = 4 * (max_corner_segments + 1);
 const max_antialias_width: f32 = 1;
+
+const CornerSegments = [4]usize;
 
 pub const FontAtlas = font_atlas_mod.FontAtlas;
 
@@ -141,10 +143,11 @@ pub const Batcher = struct {
             return;
         }
 
+        const segments = cornerSegmentCounts(outer, border.radius);
         var outer_points: [rounded_point_count]types.Vec2 = undefined;
         var inner_points: [rounded_point_count]types.Vec2 = undefined;
-        const outer_count = roundedRectPoints(outer, border.radius, &outer_points);
-        const inner_count = roundedRectPoints(inner, insetRadii(border.radius, border_width), &inner_points);
+        const outer_count = roundedRectPoints(outer, border.radius, segments, &outer_points);
+        const inner_count = roundedRectPoints(inner, insetRadii(border.radius, border_width), segments, &inner_points);
         if (outer_count < 3 or inner_count != outer_count) return;
 
         try self.ensureBatch(white_texture_id, self.currentClip());
@@ -175,7 +178,7 @@ pub const Batcher = struct {
         if (self.antialias_width > 0) {
             var fringe_points: [rounded_point_count]types.Vec2 = undefined;
             const fringe_rect = outsetRect(outer, self.antialias_width);
-            const fringe_count = roundedRectPoints(fringe_rect, outsetRadii(border.radius, self.antialias_width), &fringe_points);
+            const fringe_count = roundedRectPoints(fringe_rect, outsetRadii(border.radius, self.antialias_width), segments, &fringe_points);
             if (fringe_count == outer_count) {
                 try self.addTexturedRing(
                     outer,
@@ -296,8 +299,9 @@ pub const Batcher = struct {
             return;
         }
 
+        const segments = cornerSegmentCounts(rect, radius);
         var points: [rounded_point_count]types.Vec2 = undefined;
-        const count = roundedRectPoints(rect, radius, &points);
+        const count = roundedRectPoints(rect, radius, segments, &points);
         if (count < 3) return;
 
         try self.ensureBatch(texture_id, self.currentClip());
@@ -332,7 +336,7 @@ pub const Batcher = struct {
         if (self.antialias_width > 0) {
             var fringe_points: [rounded_point_count]types.Vec2 = undefined;
             const fringe_rect = outsetRect(rect, self.antialias_width);
-            const fringe_count = roundedRectPoints(fringe_rect, outsetRadii(radius, self.antialias_width), &fringe_points);
+            const fringe_count = roundedRectPoints(fringe_rect, outsetRadii(radius, self.antialias_width), segments, &fringe_points);
             if (fringe_count == count) {
                 try self.addTexturedRing(
                     rect,
@@ -499,16 +503,28 @@ fn withAlpha(color: types.Color, alpha_factor: f32) types.Color {
     };
 }
 
-fn roundedRectPoints(rect: types.Rect, radius: style_mod.CornerRadii, points: *[rounded_point_count]types.Vec2) usize {
+/// Segment counts per corner, scaled with the clamped radius so small
+/// radii cost few vertices. Computed once per shape and shared by the
+/// fill, inner-border, and antialias-fringe outlines so their point
+/// counts always match.
+fn cornerSegmentCounts(rect: types.Rect, radius: style_mod.CornerRadii) CornerSegments {
     const r = clampedRadii(rect, radius);
-    if (r.top_left <= 0 and r.top_right <= 0 and r.bottom_right <= 0 and r.bottom_left <= 0) {
-        points[0] = .{ .x = rect.x, .y = rect.y };
-        points[1] = .{ .x = rect.x + rect.w, .y = rect.y };
-        points[2] = .{ .x = rect.x + rect.w, .y = rect.y + rect.h };
-        points[3] = .{ .x = rect.x, .y = rect.y + rect.h };
-        return 4;
-    }
+    return .{
+        segmentsForRadius(r.top_right),
+        segmentsForRadius(r.bottom_right),
+        segmentsForRadius(r.bottom_left),
+        segmentsForRadius(r.top_left),
+    };
+}
 
+fn segmentsForRadius(radius: f32) usize {
+    if (radius <= 0) return 1;
+    const segments: usize = @intFromFloat(@ceil(radius * 0.4));
+    return @min(max_corner_segments, @max(2, segments));
+}
+
+fn roundedRectPoints(rect: types.Rect, radius: style_mod.CornerRadii, segments: CornerSegments, points: *[rounded_point_count]types.Vec2) usize {
+    const r = clampedRadii(rect, radius);
     const pi = std.math.pi;
     const quarter_turn = pi * 0.5;
     const centers = [_]types.Vec2{
@@ -524,9 +540,10 @@ fn roundedRectPoints(rect: types.Rect, radius: style_mod.CornerRadii, points: *[
     var corner: usize = 0;
     while (corner < centers.len) : (corner += 1) {
         const corner_radius = radii[corner];
+        const corner_segments = segments[corner];
         var segment: usize = 0;
-        while (segment <= rounded_corner_segments) : (segment += 1) {
-            const progress = @as(f32, @floatFromInt(segment)) / @as(f32, @floatFromInt(rounded_corner_segments));
+        while (segment <= corner_segments) : (segment += 1) {
+            const progress = @as(f32, @floatFromInt(segment)) / @as(f32, @floatFromInt(corner_segments));
             const angle = starts[corner] + quarter_turn * progress;
             points[count] = .{
                 .x = centers[corner].x + @cos(angle) * corner_radius,
@@ -562,6 +579,42 @@ fn snapToRasterPixel(value: f32, raster_scale: f32) f32 {
 
 fn loadTestFont(allocator: std.mem.Allocator) ![]u8 {
     return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "assets/fonts/Inter-Regular.ttf", allocator, .limited(4 * 1024 * 1024));
+}
+
+test "rounded rect vertex count scales with radius" {
+    var small = Batcher.init(std.testing.allocator);
+    defer small.deinit();
+    var large = Batcher.init(std.testing.allocator);
+    defer large.deinit();
+
+    const rect: types.Rect = .{ .x = 0, .y = 0, .w = 200, .h = 100 };
+    const color = types.Color.rgba(255, 255, 255, 255);
+    const small_data = try small.build(&.{
+        .{ .rect = .{ .rect = rect, .color = color, .radius = style_mod.CornerRadii.all(4) } },
+    }, null, 1);
+    const large_data = try large.build(&.{
+        .{ .rect = .{ .rect = rect, .color = color, .radius = style_mod.CornerRadii.all(40) } },
+    }, null, 1);
+
+    try std.testing.expect(small_data.vertices.len > 0);
+    try std.testing.expect(small_data.vertices.len < large_data.vertices.len);
+}
+
+test "rounded border renders when inner radii clamp to zero" {
+    var batcher = Batcher.init(std.testing.allocator);
+    defer batcher.deinit();
+
+    const data = try batcher.build(&.{
+        .{ .border = .{
+            .rect = .{ .x = 0, .y = 0, .w = 100, .h = 50 },
+            .color = types.Color.rgba(255, 255, 255, 255),
+            .widths = style_mod.Edges.all(5),
+            .radius = style_mod.CornerRadii.all(2),
+        } },
+    }, null, 1);
+
+    try std.testing.expect(data.vertices.len > 0);
+    try std.testing.expect(data.indices.len > 0);
 }
 
 test "text commands emit atlas glyph quads" {

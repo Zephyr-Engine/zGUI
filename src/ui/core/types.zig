@@ -52,9 +52,28 @@ pub const Color = packed struct {
     }
 };
 
+/// NodeId packs a slot index in the low bits and a generation counter in the
+/// high bits, so a stale id held after destroyNode never resolves to a node
+/// that later reused the same slot.
 pub const NodeId = u32;
 pub const WindowId = u32;
 pub const DockNodeId = u32;
+
+pub const node_index_bits = 24;
+pub const node_index_mask: u32 = (1 << node_index_bits) - 1;
+pub const max_node_index: u32 = node_index_mask - 1;
+
+pub fn makeNodeId(index: u32, generation: u8) NodeId {
+    return (@as(u32, generation) << node_index_bits) | index;
+}
+
+pub fn nodeIndex(id: NodeId) u32 {
+    return id & node_index_mask;
+}
+
+pub fn nodeGeneration(id: NodeId) u8 {
+    return @intCast(id >> node_index_bits);
+}
 
 pub const invalid_node: NodeId = std.math.maxInt(NodeId);
 pub const invalid_window: WindowId = std.math.maxInt(WindowId);

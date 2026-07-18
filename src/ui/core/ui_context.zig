@@ -45,6 +45,7 @@ pub const Ui = struct {
     input: input_mod.InputState = .{},
     root: types.NodeId = types.invalid_node,
     window_size: types.Vec2 = .{},
+    last_window_size: types.Vec2 = .{ .x = -1, .y = -1 },
     dt: f32 = 0,
     stats: UiStats = .{},
     current_draw_data: draw_data_mod.DrawData = .empty,
@@ -53,6 +54,9 @@ pub const Ui = struct {
     text_raster_scale: f32 = 1,
     theme: theme_mod.Theme = theme_mod.zephyr_dark,
     requested_cursor: platform_events.CursorKind = .arrow,
+    force_layout: bool = true,
+    force_paint: bool = true,
+    draw_generation: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator) !Ui {
         var tree = tree_mod.UiTree.init(allocator);
@@ -93,39 +97,72 @@ pub const Ui = struct {
     }
 
     pub fn endFrame(self: *Ui) !void {
-        layout_mod.layoutTree(&self.tree, self.root, self.window_size, self.text_measurer);
-        const clamped_scroll = self.clampScrollOffsets(self.root);
-        const input_scroll = self.applyScrollInput();
-        const animated_scroll = self.animateScrollOffsets(self.root);
-        if (clamped_scroll or input_scroll or animated_scroll) {
+        var dirty_layout_count: u32 = 0;
+        var dirty_paint_count: u32 = 0;
+        for (self.tree.nodes.items) |node| {
+            if (node.generation == 0) continue;
+            if (node.dirty.layout) dirty_layout_count += 1;
+            if (node.dirty.paint) dirty_paint_count += 1;
+        }
+
+        const resized = self.window_size.x != self.last_window_size.x or
+            self.window_size.y != self.last_window_size.y;
+        const needs_layout = self.force_layout or resized or dirty_layout_count > 0;
+
+        if (needs_layout) {
             layout_mod.layoutTree(&self.tree, self.root, self.window_size, self.text_measurer);
         }
-        self.paint_list.clearRetainingCapacity();
-        try paint_mod.buildPaintList(&self.tree, self.root, &self.paint_list);
-        self.current_draw_data = try self.batcher.build(self.paint_list.commands.items, self.font_atlas, self.text_raster_scale);
-        self.updateStats();
+
+        const input_scroll = self.applyScrollInput();
+        const scrolled = self.updateScrollNode(self.root) or input_scroll;
+        if (scrolled) {
+            layout_mod.layoutTree(&self.tree, self.root, self.window_size, self.text_measurer);
+        }
+
+        const needs_paint = self.force_paint or needs_layout or scrolled or dirty_paint_count > 0;
+        if (needs_paint) {
+            self.paint_list.clearRetainingCapacity();
+            try paint_mod.buildPaintList(&self.tree, self.root, &self.paint_list);
+            self.draw_generation +%= 1;
+            self.current_draw_data = try self.batcher.build(self.paint_list.commands.items, self.font_atlas, self.text_raster_scale);
+            self.current_draw_data.generation = self.draw_generation;
+        }
+
+        self.last_window_size = self.window_size;
+        self.force_layout = false;
+        self.force_paint = false;
+        self.updateStats(dirty_layout_count, dirty_paint_count);
         self.clearDirty();
     }
 
     pub fn setTextMeasurer(self: *Ui, text_measurer: ?text_mod.TextMeasurer) void {
         self.text_measurer = text_measurer;
+        self.invalidateTextMeasurements();
     }
 
     pub fn setFontAtlas(self: *Ui, font_atlas: ?*batcher_mod.FontAtlas) void {
         self.font_atlas = font_atlas;
         self.text_measurer = if (font_atlas) |atlas| atlas.textMeasurer() else null;
+        self.invalidateTextMeasurements();
     }
 
     pub fn setTextRasterScale(self: *Ui, raster_scale: f32) void {
-        if (!std.math.isFinite(raster_scale)) {
-            self.text_raster_scale = 1;
-            return;
-        }
-        self.text_raster_scale = @max(0.25, raster_scale);
+        const next = if (std.math.isFinite(raster_scale)) @max(0.25, raster_scale) else 1;
+        if (next != self.text_raster_scale) self.force_paint = true;
+        self.text_raster_scale = next;
     }
 
     pub fn setTheme(self: *Ui, theme: theme_mod.Theme) void {
         self.theme = theme;
+        self.force_layout = true;
+        self.force_paint = true;
+    }
+
+    fn invalidateTextMeasurements(self: *Ui) void {
+        self.force_layout = true;
+        for (self.tree.nodes.items) |*node| {
+            node.measured_text_font_size = -1;
+        }
     }
 
     pub fn drawData(self: *const Ui) draw_data_mod.DrawData {
@@ -153,15 +190,7 @@ pub const Ui = struct {
         input_mod.applyEvent(&self.input, event);
     }
 
-    fn updateStats(self: *Ui) void {
-        var dirty_layout_count: u32 = 0;
-        var dirty_paint_count: u32 = 0;
-        for (self.tree.nodes.items) |node| {
-            if (node.generation == 0) continue;
-            if (node.dirty.layout) dirty_layout_count += 1;
-            if (node.dirty.paint) dirty_paint_count += 1;
-        }
-
+    fn updateStats(self: *Ui, dirty_layout_count: u32, dirty_paint_count: u32) void {
         self.stats = .{
             .node_count = @intCast(self.tree.nodes.items.len - self.tree.free_list.items.len),
             .dirty_layout_count = dirty_layout_count,
@@ -202,36 +231,21 @@ pub const Ui = struct {
         return changed;
     }
 
-    fn animateScrollOffsets(self: *Ui, id: types.NodeId) bool {
-        const node = self.tree.get(id) orelse return false;
-        if (!node.flags.visible) return false;
-
-        var changed = animateNodeScroll(node, self.dt);
-        if (changed) {
-            node.dirty.layout = true;
-            node.dirty.paint = true;
-        }
-
-        var child = node.first_child;
-        while (child != types.invalid_node) {
-            const next = if (self.tree.getConst(child)) |child_node| child_node.next_sibling else types.invalid_node;
-            changed = self.animateScrollOffsets(child) or changed;
-            child = next;
-        }
-        return changed;
-    }
-
-    fn clampScrollOffsets(self: *Ui, id: types.NodeId) bool {
+    /// Single traversal that clamps scroll offsets to the current content
+    /// size and advances scroll animations toward their targets.
+    fn updateScrollNode(self: *Ui, id: types.NodeId) bool {
         const node = self.tree.get(id) orelse return false;
         if (!node.flags.visible) return false;
 
         const before = node.scroll_offset;
         const before_target = node.scroll_target_offset;
         clampScroll(node);
-        var changed = before.x != node.scroll_offset.x or
-            before.y != node.scroll_offset.y or
-            before_target.x != node.scroll_target_offset.x or
+        var changed = before_target.x != node.scroll_target_offset.x or
             before_target.y != node.scroll_target_offset.y;
+        changed = animateNodeScroll(node, self.dt) or changed;
+        changed = changed or
+            before.x != node.scroll_offset.x or
+            before.y != node.scroll_offset.y;
         if (changed) {
             node.dirty.layout = true;
             node.dirty.paint = true;
@@ -240,7 +254,7 @@ pub const Ui = struct {
         var child = node.first_child;
         while (child != types.invalid_node) {
             const next = if (self.tree.getConst(child)) |child_node| child_node.next_sibling else types.invalid_node;
-            changed = self.clampScrollOffsets(child) or changed;
+            changed = self.updateScrollNode(child) or changed;
             child = next;
         }
         return changed;
@@ -315,6 +329,42 @@ fn maxScroll(node: anytype, axis: enum { x, y }) f32 {
 
 fn clamp(v: f32, lo: f32, hi: f32) f32 {
     return @min(hi, @max(lo, v));
+}
+
+test "idle frames reuse draw data and rebuild on change" {
+    var ui_state = try Ui.init(std.testing.allocator);
+    defer ui_state.deinit();
+
+    const panel = try ui_state.tree.createNode(.panel);
+    ui_state.tree.get(panel).?.style = .{
+        .width = .fill,
+        .height = .{ .px = 40 },
+        .background = types.Color.rgba(40, 40, 40, 255),
+    };
+    try ui_state.tree.appendChild(ui_state.root, panel);
+
+    try ui_state.beginFrame(.{ .events = &.{}, .window_size = .{ .x = 200, .y = 100 } });
+    try ui_state.endFrame();
+    const first_generation = ui_state.drawData().generation;
+    try std.testing.expect(ui_state.drawData().vertices.len > 0);
+
+    // Nothing changed: geometry must be reused, not rebuilt.
+    try ui_state.beginFrame(.{ .events = &.{}, .window_size = .{ .x = 200, .y = 100 } });
+    try ui_state.endFrame();
+    try std.testing.expectEqual(first_generation, ui_state.drawData().generation);
+
+    // A style change dirties the node and forces a rebuild.
+    ui_state.tree.get(panel).?.style.background = types.Color.rgba(90, 90, 90, 255);
+    ui_state.tree.get(panel).?.dirty.paint = true;
+    try ui_state.beginFrame(.{ .events = &.{}, .window_size = .{ .x = 200, .y = 100 } });
+    try ui_state.endFrame();
+    try std.testing.expect(ui_state.drawData().generation != first_generation);
+
+    // A window resize also forces a rebuild.
+    const before_resize = ui_state.drawData().generation;
+    try ui_state.beginFrame(.{ .events = &.{}, .window_size = .{ .x = 300, .y = 100 } });
+    try ui_state.endFrame();
+    try std.testing.expect(ui_state.drawData().generation != before_resize);
 }
 
 test "scroll input updates both overflow axes and clamps to content" {

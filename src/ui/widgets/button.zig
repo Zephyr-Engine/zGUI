@@ -7,9 +7,9 @@ pub fn button(ui: *app.Ui, parent: types.NodeId, text: []const u8, style: style_
     const id = try ui.tree.createNode(.button);
     const node = ui.tree.get(id).?;
     node.style = style;
-    node.text = text;
     node.flags.visible = true;
     node.flags.interactive = true;
+    try ui.tree.setText(id, text);
     try ui.tree.appendChild(parent, id);
     return id;
 }

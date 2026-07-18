@@ -30,7 +30,7 @@ pub const NodeFlags = packed struct {
 
 pub const Node = struct {
     id: types.NodeId,
-    generation: u32,
+    generation: u8,
 
     kind: NodeKind,
 
@@ -50,10 +50,16 @@ pub const Node = struct {
 
     flags: NodeFlags = .{},
 
+    /// Owned by the tree; set via UiTree.setText, freed on destroy.
     text: ?[]const u8 = null,
     image: ?Image = null,
 
-    pub fn init(id: types.NodeId, generation: u32, kind: NodeKind) Node {
+    // Cached text measurement, valid while the text is unchanged and the
+    // font size matches. A negative size marks the cache invalid.
+    measured_text: types.Vec2 = .{},
+    measured_text_font_size: f32 = -1,
+
+    pub fn init(id: types.NodeId, generation: u8, kind: NodeKind) Node {
         return .{
             .id = id,
             .generation = generation,

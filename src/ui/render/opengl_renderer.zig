@@ -23,6 +23,7 @@ pub const OpenGlRenderer = struct {
     framebuffer_height: u32 = 0,
     logical_width: f32 = 0,
     logical_height: f32 = 0,
+    uploaded_generation: ?u32 = null,
 
     pub fn init(proc_address_fn: ProcAddressFn) !OpenGlRenderer {
         try loadGlad(proc_address_fn);
@@ -106,20 +107,25 @@ pub const OpenGlRenderer = struct {
         const projection = ortho(0, self.logical_width, self.logical_height, 0);
         c.glUniformMatrix4fv(self.projection_location, 1, c.GL_FALSE, &projection);
 
-        c.glBindBuffer(c.GL_ARRAY_BUFFER, self.vbo);
-        c.glBufferData(
-            c.GL_ARRAY_BUFFER,
-            @intCast(data.vertices.len * @sizeOf(draw_data.Vertex)),
-            data.vertices.ptr,
-            c.GL_STREAM_DRAW,
-        );
-        c.glBindBuffer(c.GL_ELEMENT_ARRAY_BUFFER, self.ibo);
-        c.glBufferData(
-            c.GL_ELEMENT_ARRAY_BUFFER,
-            @intCast(data.indices.len * @sizeOf(u32)),
-            data.indices.ptr,
-            c.GL_STREAM_DRAW,
-        );
+        // Geometry is retained between frames; skip the upload when the UI
+        // produced the same draw data generation as the last upload.
+        if (self.uploaded_generation == null or self.uploaded_generation.? != data.generation) {
+            c.glBindBuffer(c.GL_ARRAY_BUFFER, self.vbo);
+            c.glBufferData(
+                c.GL_ARRAY_BUFFER,
+                @intCast(data.vertices.len * @sizeOf(draw_data.Vertex)),
+                data.vertices.ptr,
+                c.GL_STREAM_DRAW,
+            );
+            c.glBindBuffer(c.GL_ELEMENT_ARRAY_BUFFER, self.ibo);
+            c.glBufferData(
+                c.GL_ELEMENT_ARRAY_BUFFER,
+                @intCast(data.indices.len * @sizeOf(u32)),
+                data.indices.ptr,
+                c.GL_STREAM_DRAW,
+            );
+            self.uploaded_generation = data.generation;
+        }
 
         for (data.batches) |batch| {
             if (batch.index_count == 0) continue;
@@ -196,14 +202,48 @@ pub const OpenGlRenderer = struct {
             return;
         }
 
-        if (font_atlas.dirty or font_atlas.full_upload) {
+        if (font_atlas.full_upload) {
             try self.uploadTextureRgba(font_atlas.texture_id, font_atlas.width, font_atlas.height, font_atlas.pixels);
+            font_atlas.markClean();
+            return;
+        }
+
+        if (font_atlas.dirty) {
+            if (font_atlas.dirty_rect) |rect| {
+                try uploadTextureSubRgba(font_atlas.texture_id, font_atlas.width, rect, font_atlas.pixels);
+            } else {
+                try self.uploadTextureRgba(font_atlas.texture_id, font_atlas.width, font_atlas.height, font_atlas.pixels);
+            }
             font_atlas.markClean();
         }
     }
 
     pub fn endFrame(self: *OpenGlRenderer) !void {
         _ = self;
+    }
+
+    fn uploadTextureSubRgba(texture_id: u32, atlas_width: u32, rect: font_atlas_mod.DirtyRect, pixels: []const u8) !void {
+        if (rect.w == 0 or rect.h == 0) return;
+        const row_end = try std.math.mul(usize, @as(usize, rect.y) + rect.h, atlas_width);
+        if (row_end * 4 > pixels.len) return error.InvalidTextureData;
+
+        const offset = (@as(usize, rect.y) * @as(usize, atlas_width) + @as(usize, rect.x)) * 4;
+        c.glBindTexture(c.GL_TEXTURE_2D, texture_id);
+        c.glPixelStorei(c.GL_UNPACK_ALIGNMENT, 1);
+        c.glPixelStorei(c.GL_UNPACK_ROW_LENGTH, @intCast(atlas_width));
+        c.glTexSubImage2D(
+            c.GL_TEXTURE_2D,
+            0,
+            @intCast(rect.x),
+            @intCast(rect.y),
+            @intCast(rect.w),
+            @intCast(rect.h),
+            c.GL_RGBA,
+            c.GL_UNSIGNED_BYTE,
+            pixels.ptr + offset,
+        );
+        c.glPixelStorei(c.GL_UNPACK_ROW_LENGTH, 0);
+        c.glBindTexture(c.GL_TEXTURE_2D, 0);
     }
 
     pub fn versionString() []const u8 {

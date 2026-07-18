@@ -1,3 +1,4 @@
+const std = @import("std");
 const types = @import("../core/types.zig");
 const style_mod = @import("../core/style.zig");
 const node_mod = @import("../core/node.zig");
@@ -30,6 +31,9 @@ pub fn image(ui: *app.Ui, parent: types.NodeId, options: ImageOptions) !types.No
 
 pub fn setImage(ui: *app.Ui, id: types.NodeId, image_data: node_mod.Image) void {
     if (ui.tree.get(id)) |node| {
+        if (node.image) |existing| {
+            if (std.meta.eql(existing, image_data)) return;
+        }
         node.image = image_data;
         node.dirty.paint = true;
     }
