@@ -102,6 +102,7 @@ pub const OpenGlRenderer = struct {
         c.glBlendFunc(c.GL_SRC_ALPHA, c.GL_ONE_MINUS_SRC_ALPHA);
         c.glEnable(c.GL_MULTISAMPLE);
         c.glDisable(c.GL_DEPTH_TEST);
+        c.glDisable(c.GL_CULL_FACE);
         c.glEnable(c.GL_SCISSOR_TEST);
 
         const projection = ortho(0, self.logical_width, self.logical_height, 0);
