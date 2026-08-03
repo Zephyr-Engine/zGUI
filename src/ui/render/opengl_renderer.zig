@@ -32,6 +32,10 @@ pub const OpenGlRenderer = struct {
         var self: OpenGlRenderer = .{};
         self.program = try createProgram();
         self.projection_location = c.glGetUniformLocation(self.program, "u_projection");
+        const texture_location = c.glGetUniformLocation(self.program, "u_texture");
+        c.glUseProgram(self.program);
+        c.glUniform1i(texture_location, 0);
+        c.glUseProgram(0);
 
         c.glGenVertexArrays(1, &self.vao);
         c.glGenBuffers(1, &self.vbo);
@@ -49,6 +53,7 @@ pub const OpenGlRenderer = struct {
         c.glEnableVertexAttribArray(2);
         c.glVertexAttribPointer(2, 4, c.GL_UNSIGNED_BYTE, c.GL_TRUE, stride, @ptrFromInt(@offsetOf(draw_data.Vertex, "color")));
 
+        selectTextureUnit();
         c.glGenTextures(1, &self.white_texture);
         c.glBindTexture(c.GL_TEXTURE_2D, self.white_texture);
         const white = [_]u8{ 255, 255, 255, 255 };
@@ -95,6 +100,7 @@ pub const OpenGlRenderer = struct {
     pub fn render(self: *OpenGlRenderer, data: draw_data.DrawData) !void {
         if (data.vertices.len == 0 or data.indices.len == 0) return;
 
+        selectTextureUnit();
         c.glUseProgram(self.program);
         c.glBindVertexArray(self.vao);
         c.glEnable(c.GL_BLEND);
@@ -154,6 +160,7 @@ pub const OpenGlRenderer = struct {
         c.glGenTextures(1, &texture);
         if (texture == 0) return error.OpenGlTextureCreateFailed;
 
+        selectTextureUnit();
         c.glBindTexture(c.GL_TEXTURE_2D, texture);
         c.glPixelStorei(c.GL_UNPACK_ALIGNMENT, 1);
         c.glTexImage2D(
@@ -180,6 +187,7 @@ pub const OpenGlRenderer = struct {
         if (texture_id == 0) return error.InvalidTexture;
         try validateTexturePixels(width, height, pixels);
 
+        selectTextureUnit();
         c.glBindTexture(c.GL_TEXTURE_2D, texture_id);
         c.glPixelStorei(c.GL_UNPACK_ALIGNMENT, 1);
         c.glTexImage2D(
@@ -229,6 +237,7 @@ pub const OpenGlRenderer = struct {
         if (row_end * 4 > pixels.len) return error.InvalidTextureData;
 
         const offset = (@as(usize, rect.y) * @as(usize, atlas_width) + @as(usize, rect.x)) * 4;
+        selectTextureUnit();
         c.glBindTexture(c.GL_TEXTURE_2D, texture_id);
         c.glPixelStorei(c.GL_UNPACK_ALIGNMENT, 1);
         c.glPixelStorei(c.GL_UNPACK_ROW_LENGTH, @intCast(atlas_width));
@@ -267,6 +276,11 @@ pub const OpenGlRenderer = struct {
         try self.endFrame();
     }
 };
+
+fn selectTextureUnit() void {
+    c.glActiveTexture(c.GL_TEXTURE0);
+    c.glBindSampler(0, 0);
+}
 
 pub fn loadGlad(proc_address_fn: ProcAddressFn) !void {
     active_proc_address_fn = proc_address_fn;
