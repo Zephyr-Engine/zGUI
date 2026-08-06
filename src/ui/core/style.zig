@@ -70,8 +70,12 @@ pub const Style = struct {
 
     background: types.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
     foreground: types.Color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    hover_background: ?types.Color = null,
+    pressed_background: ?types.Color = null,
 
     border_color: types.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 },
+    hover_border_color: ?types.Color = null,
+    pressed_border_color: ?types.Color = null,
     border_width: f32 = 0,
     border_edges: ?Edges = null,
     radius: CornerRadii = .{},

@@ -182,6 +182,14 @@ pub const OpenGlRenderer = struct {
         return texture;
     }
 
+    /// Releases a texture created by `createTextureRgba` and clears the caller's id.
+    pub fn destroyTexture(self: *OpenGlRenderer, texture_id: *u32) void {
+        _ = self;
+        if (texture_id.* == 0) return;
+        c.glDeleteTextures(1, texture_id);
+        texture_id.* = 0;
+    }
+
     pub fn uploadTextureRgba(self: *OpenGlRenderer, texture_id: u32, width: u32, height: u32, pixels: []const u8) !void {
         _ = self;
         if (texture_id == 0) return error.InvalidTexture;

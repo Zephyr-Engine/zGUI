@@ -74,11 +74,11 @@ pub fn buildPaintList(tree: *const tree_mod.UiTree, root: types.NodeId, list: *P
     var border = node.style.border_color;
     if (node.kind == .button) {
         if (node.flags.pressed) {
-            background = darken(background, 24);
-            border = lighten(border, 36);
+            background = node.style.pressed_background orelse darken(background, 24);
+            border = node.style.pressed_border_color orelse lighten(border, 36);
         } else if (node.flags.hovered) {
-            background = lighten(background, 20);
-            border = lighten(border, 20);
+            background = node.style.hover_background orelse lighten(background, 20);
+            border = node.style.hover_border_color orelse lighten(border, 20);
         }
     }
 
@@ -92,8 +92,9 @@ pub fn buildPaintList(tree: *const tree_mod.UiTree, root: types.NodeId, list: *P
 
     if (node.image) |image| {
         if (image.texture_id != 0 and !node.bounds.isEmpty()) {
+            const image_rect = if (node.kind == .button) node.bounds.inset(node.style.padding) else node.bounds;
             try list.append(.{ .image = .{
-                .rect = node.bounds,
+                .rect = image_rect,
                 .texture_id = image.texture_id,
                 .uv0 = image.uv0,
                 .uv1 = image.uv1,
