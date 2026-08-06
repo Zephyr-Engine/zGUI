@@ -1,6 +1,7 @@
 const types = @import("types.zig");
 const tree_mod = @import("tree.zig");
 const events = @import("../platform/events.zig");
+const dirty = @import("dirty.zig");
 
 pub const InputState = struct {
     mouse_pos: types.Vec2 = .{},
@@ -66,12 +67,12 @@ pub fn routePointerState(tree: *tree_mod.UiTree, root: types.NodeId, input: *Inp
     if (next_hovered != input.hovered) {
         if (tree.get(input.hovered)) |old| {
             old.flags.hovered = false;
-            old.dirty.paint = true;
         }
+        dirty.markPaintDirty(tree, input.hovered);
         if (tree.get(next_hovered)) |new| {
             new.flags.hovered = true;
-            new.dirty.paint = true;
         }
+        dirty.markPaintDirty(tree, next_hovered);
         input.hovered = next_hovered;
     }
 
@@ -81,8 +82,8 @@ pub fn routePointerState(tree: *tree_mod.UiTree, root: types.NodeId, input: *Inp
         if (tree.get(input.active)) |node| {
             node.flags.pressed = true;
             node.flags.focused = true;
-            node.dirty.paint = true;
         }
+        dirty.markPaintDirty(tree, input.active);
     }
 
     if (input.mouse_released[0]) {
@@ -91,8 +92,8 @@ pub fn routePointerState(tree: *tree_mod.UiTree, root: types.NodeId, input: *Inp
         }
         if (tree.get(input.active)) |node| {
             node.flags.pressed = false;
-            node.dirty.paint = true;
         }
+        dirty.markPaintDirty(tree, input.active);
         input.active = types.invalid_node;
     }
 }

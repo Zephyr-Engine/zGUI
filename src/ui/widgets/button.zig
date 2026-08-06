@@ -5,7 +5,7 @@ const input = @import("../core/input.zig");
 const app = @import("../core/ui_context.zig");
 
 pub const IconButtonOptions = struct {
-    texture_id: u32,
+    texture: types.TextureHandle,
     style: style_mod.Style,
     uv0: types.Vec2 = .{ .x = 0, .y = 0 },
     uv1: types.Vec2 = .{ .x = 1, .y = 1 },
@@ -29,7 +29,7 @@ pub fn iconButton(ui: *app.Ui, parent: types.NodeId, options: IconButtonOptions)
     const id = try button(ui, parent, "", options.style);
     const node = ui.tree.get(id).?;
     node.image = node_mod.Image{
-        .texture_id = options.texture_id,
+        .texture = options.texture,
         .uv0 = options.uv0,
         .uv1 = options.uv1,
         .tint = options.tint,

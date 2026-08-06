@@ -1,5 +1,6 @@
 const std = @import("std");
 const ui = @import("zGUI");
+const ui_glfw = @import("zGUI_glfw");
 
 const toolbar_height: f32 = 44;
 const main_padding: f32 = 8;
@@ -72,20 +73,20 @@ const DemoState = struct {
         });
     }
 
-    pub fn updateResizeInput(self: *DemoState, app_state: *ui.Ui, platform: *ui.GlfwPlatform) bool {
+    pub fn updateResizeInput(self: *DemoState, app_state: *ui.Ui, platform: *ui_glfw.GlfwPlatform) bool {
         const hovered_split = self.hoveredSplit(app_state);
-        if (ui.input.mousePressed(app_state.input, .left)) {
+        if (app_state.mousePressed(.left)) {
             if (hovered_split) |split| {
-                self.dock.beginResize(split, app_state.input.mouse_pos) catch {};
+                self.dock.beginResize(split, app_state.mousePosition()) catch {};
             }
         }
 
-        const changed = if (ui.input.mouseDown(app_state.input, .left))
-            self.dock.updateResize(app_state.input.mouse_pos)
+        const changed = if (app_state.mouseDown(.left))
+            self.dock.updateResize(app_state.mousePosition())
         else
             false;
 
-        if (ui.input.mouseReleased(app_state.input, .left)) {
+        if (app_state.mouseReleased(.left)) {
             self.dock.endResize();
         }
 
@@ -116,9 +117,9 @@ const DemoState = struct {
     }
 
     fn hoveredSplit(self: *const DemoState, app_state: *const ui.Ui) ?ui.DockNodeId {
-        if (ui.input.nodeHovered(app_state.input, self.nodes.left_handle)) return self.refs.left_split;
-        if (ui.input.nodeHovered(app_state.input, self.nodes.right_handle)) return self.refs.right_split;
-        if (ui.input.nodeHovered(app_state.input, self.nodes.bottom_handle)) return self.refs.bottom_split;
+        if (app_state.interaction(self.nodes.left_handle).hovered) return self.refs.left_split;
+        if (app_state.interaction(self.nodes.right_handle).hovered) return self.refs.right_split;
+        if (app_state.interaction(self.nodes.bottom_handle).hovered) return self.refs.bottom_split;
         return null;
     }
 
@@ -138,21 +139,22 @@ const DemoState = struct {
 
     fn setHandleStyle(self: *const DemoState, app_state: *ui.Ui, handle: ui.NodeId, highlighted: bool) void {
         _ = self;
-        if (app_state.tree.get(handle)) |node| {
+        if (app_state.nodeStyle(handle)) |current| {
             const next = if (highlighted) active_handle_color else idle_handle_color;
-            if (std.meta.eql(node.style.background, next)) return;
-            node.style.background = next;
-            node.dirty.paint = true;
+            if (std.meta.eql(current.background, next)) return;
+            var style = current;
+            style.background = next;
+            app_state.setStyle(handle, style) catch {};
         }
     }
 };
 
 pub fn main(init: std.process.Init) !void {
-    var platform = try ui.GlfwPlatform.init(init.gpa, 1280, 800, "zGUI retained editor demo");
+    var platform = try ui_glfw.GlfwPlatform.init(init.gpa, 1280, 800, "zGUI retained editor demo");
     defer platform.deinit();
     platform.makeContextCurrent();
 
-    var gl = try ui.OpenGlRenderer.init(ui.GlfwPlatform.getProcAddress);
+    var gl = try ui.OpenGlRenderer.init(init.gpa, ui_glfw.GlfwPlatform.getProcAddress);
     defer gl.deinit();
     std.debug.print("OpenGL: {s}\n", .{ui.OpenGlRenderer.versionString()});
     const initial_window_size = platform.getWindowSize();
@@ -203,22 +205,23 @@ pub fn main(init: std.process.Init) !void {
         }
         demo.applyPanelStyles(&state);
 
-        if (ui.widgets.buttonClicked(&state, demo.nodes.click_button)) {
+        if (state.clicked(demo.nodes.click_button)) {
             click_count += 1;
         }
 
         var click_buf: [64]u8 = undefined;
-        try state.tree.setText(demo.nodes.click_label, try std.fmt.bufPrint(&click_buf, "Clicks {d}", .{click_count}));
+        try state.setText(demo.nodes.click_label, try std.fmt.bufPrint(&click_buf, "Clicks {d}", .{click_count}));
 
         var stats_buf: [160]u8 = undefined;
-        try state.tree.setText(demo.nodes.stats_label, try std.fmt.bufPrint(
+        const stats = state.statsSnapshot();
+        try state.setText(demo.nodes.stats_label, try std.fmt.bufPrint(
             &stats_buf,
             "Nodes {d}  Commands {d}  Vertices {d}  Batches {d}",
             .{
-                state.stats.node_count,
-                state.stats.paint_command_count,
-                state.stats.vertex_count,
-                state.stats.batch_count,
+                stats.node_count,
+                stats.paint_command_count,
+                stats.vertex_count,
+                stats.batch_count,
             },
         ));
 
@@ -264,22 +267,22 @@ fn createDockTree(dock: *ui.DockManager) !DemoDockRefs {
 }
 
 fn setNodeWidth(app_state: *ui.Ui, id: ui.NodeId, width: f32) void {
-    if (app_state.tree.get(id)) |node| {
+    if (app_state.nodeStyle(id)) |current| {
         const next: ui.Size = .{ .px = @max(0, width) };
-        if (std.meta.eql(node.style.width, next)) return;
-        node.style.width = next;
-        node.dirty.layout = true;
-        node.dirty.paint = true;
+        if (std.meta.eql(current.width, next)) return;
+        var style = current;
+        style.width = next;
+        app_state.setStyle(id, style) catch {};
     }
 }
 
 fn setNodeHeight(app_state: *ui.Ui, id: ui.NodeId, height: f32) void {
-    if (app_state.tree.get(id)) |node| {
+    if (app_state.nodeStyle(id)) |current| {
         const next: ui.Size = .{ .px = @max(0, height) };
-        if (std.meta.eql(node.style.height, next)) return;
-        node.style.height = next;
-        node.dirty.layout = true;
-        node.dirty.paint = true;
+        if (std.meta.eql(current.height, next)) return;
+        var style = current;
+        style.height = next;
+        app_state.setStyle(id, style) catch {};
     }
 }
 
@@ -290,13 +293,13 @@ fn isSplitHighlighted(split: ui.DockNodeId, hovered: ?ui.DockNodeId, active: ?ui
 }
 
 fn createEditorUi(state: *ui.Ui) !DemoNodes {
-    const root = state.root;
-    state.tree.get(root).?.style = .{
+    const root = state.rootNode();
+    try state.setStyle(root, .{
         .width = .fill,
         .height = .fill,
         .direction = .column,
         .background = ui.Color.rgba(14, 16, 22, 255),
-    };
+    });
 
     const toolbar = try ui.widgets.toolbar(state, root, .{
         .width = .fill,

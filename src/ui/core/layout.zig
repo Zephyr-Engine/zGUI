@@ -3,6 +3,7 @@ const types = @import("types.zig");
 const style_mod = @import("style.zig");
 const tree_mod = @import("tree.zig");
 const text_mod = @import("text.zig");
+const font_atlas_mod = @import("../render/font_atlas.zig");
 
 pub const Layout = struct {
     intrinsic: types.Vec2 = .{},
@@ -11,14 +12,14 @@ pub const Layout = struct {
 
 const Axis = enum { x, y };
 
-pub fn layoutTree(tree: *tree_mod.UiTree, root: types.NodeId, available: types.Vec2, text_measurer: ?text_mod.TextMeasurer) void {
+pub fn layoutTree(tree: *tree_mod.UiTree, root: types.NodeId, available: types.Vec2, font_atlas: ?*font_atlas_mod.FontAtlas) void {
     const root_node = tree.get(root) orelse return;
     root_node.bounds = .{ .x = 0, .y = 0, .w = available.x, .h = available.y };
-    _ = measureNode(tree, root, text_measurer);
+    _ = measureNode(tree, root, font_atlas);
     layoutChildren(tree, root);
 }
 
-fn measureNode(tree: *tree_mod.UiTree, id: types.NodeId, text_measurer: ?text_mod.TextMeasurer) types.Vec2 {
+fn measureNode(tree: *tree_mod.UiTree, id: types.NodeId, font_atlas: ?*font_atlas_mod.FontAtlas) types.Vec2 {
     const node = tree.get(id) orelse return .{};
     var measured: types.Vec2 = .{};
 
@@ -26,8 +27,8 @@ fn measureNode(tree: *tree_mod.UiTree, id: types.NodeId, text_measurer: ?text_mo
         if (!node.dirty.text and node.measured_text_font_size == node.style.font_size) {
             measured = node.measured_text;
         } else {
-            const metrics = if (text_measurer) |measurer|
-                measurer.measure(bytes, node.style.font_size)
+            const metrics = if (font_atlas) |atlas|
+                atlas.measure(bytes, node.style.font_size)
             else
                 text_mod.measureFallback(bytes, node.style.font_size);
             measured = metrics.size;
@@ -39,7 +40,7 @@ fn measureNode(tree: *tree_mod.UiTree, id: types.NodeId, text_measurer: ?text_mo
     var child = node.first_child;
     var child_count: usize = 0;
     while (child != types.invalid_node) {
-        const child_size = measureNode(tree, child, text_measurer);
+        const child_size = measureNode(tree, child, font_atlas);
         const child_node = tree.get(child) orelse break;
         child_count += 1;
         switch (node.style.direction) {
@@ -88,8 +89,8 @@ fn layoutChildren(tree: *tree_mod.UiTree, id: types.NodeId) void {
     const padding = parent.style.padding;
     const gap = parent.style.gap;
     var content: types.Rect = parent.bounds.inset(padding);
-    content.x -= scrollForAxis(parent, .x);
-    content.y -= scrollForAxis(parent, .y);
+    content.x -= scrollForAxis(parent.style, parent.scroll_offset, .x);
+    content.y -= scrollForAxis(parent.style, parent.scroll_offset, .y);
 
     switch (direction) {
         .absolute => layoutAbsolute(tree, parent.first_child, content),
@@ -207,10 +208,10 @@ fn sizeForAxis(style: style_mod.Style, axis: Axis) style_mod.Size {
     return if (axis == .x) style.width else style.height;
 }
 
-fn scrollForAxis(node: anytype, axis: Axis) f32 {
+fn scrollForAxis(style: style_mod.Style, scroll_offset: types.Vec2, axis: Axis) f32 {
     return switch (axis) {
-        .x => if (node.style.overflow_x == .scroll) node.scroll_offset.x else 0,
-        .y => if (node.style.overflow_y == .scroll) node.scroll_offset.y else 0,
+        .x => if (style.overflow_x == .scroll) scroll_offset.x else 0,
+        .y => if (style.overflow_y == .scroll) scroll_offset.y else 0,
     };
 }
 

@@ -2,7 +2,6 @@ const std = @import("std");
 const types = @import("../core/types.zig");
 const draw_data = @import("draw_data.zig");
 const font_atlas_mod = @import("font_atlas.zig");
-const renderer_mod = @import("renderer.zig");
 
 const c = @cImport({
     @cInclude("glad/glad.h");
@@ -13,6 +12,16 @@ pub const ProcAddressFn = *const fn (name: [*:0]const u8) ?*const anyopaque;
 var active_proc_address_fn: ?ProcAddressFn = null;
 
 pub const OpenGlRenderer = struct {
+    const TextureSlot = struct {
+        native: c.GLuint = 0,
+        generation: u8 = 0,
+        owned: bool = false,
+        alive: bool = false,
+    };
+
+    allocator: std.mem.Allocator,
+    textures: std.ArrayList(TextureSlot) = .empty,
+    free_textures: std.ArrayList(u32) = .empty,
     vao: c.GLuint = 0,
     vbo: c.GLuint = 0,
     ibo: c.GLuint = 0,
@@ -24,12 +33,15 @@ pub const OpenGlRenderer = struct {
     logical_width: f32 = 0,
     logical_height: f32 = 0,
     uploaded_generation: ?u32 = null,
+    vertex_buffer_capacity: usize = 0,
+    index_buffer_capacity: usize = 0,
 
-    pub fn init(proc_address_fn: ProcAddressFn) !OpenGlRenderer {
+    pub fn init(allocator: std.mem.Allocator, proc_address_fn: ProcAddressFn) !OpenGlRenderer {
         try loadGlad(proc_address_fn);
         c.glEnable(c.GL_MULTISAMPLE);
 
-        var self: OpenGlRenderer = .{};
+        var self: OpenGlRenderer = .{ .allocator = allocator };
+        errdefer self.deinit();
         self.program = try createProgram();
         self.projection_location = c.glGetUniformLocation(self.program, "u_projection");
         const texture_location = c.glGetUniformLocation(self.program, "u_texture");
@@ -66,21 +78,19 @@ pub const OpenGlRenderer = struct {
     }
 
     pub fn deinit(self: *OpenGlRenderer) void {
+        for (self.textures.items) |*slot| {
+            if (slot.alive and slot.owned and slot.native != 0) {
+                c.glDeleteTextures(1, &slot.native);
+            }
+        }
+        self.free_textures.deinit(self.allocator);
+        self.textures.deinit(self.allocator);
         if (self.white_texture != 0) c.glDeleteTextures(1, &self.white_texture);
         if (self.ibo != 0) c.glDeleteBuffers(1, &self.ibo);
         if (self.vbo != 0) c.glDeleteBuffers(1, &self.vbo);
         if (self.vao != 0) c.glDeleteVertexArrays(1, &self.vao);
         if (self.program != 0) c.glDeleteProgram(self.program);
         self.* = undefined;
-    }
-
-    pub fn renderer(self: *OpenGlRenderer) renderer_mod.Renderer {
-        return .{
-            .ptr = self,
-            .beginFrameFn = beginFrameErased,
-            .renderFn = renderErased,
-            .endFrameFn = endFrameErased,
-        };
     }
 
     pub fn beginFrame(self: *OpenGlRenderer, width: u32, height: u32) !void {
@@ -117,28 +127,20 @@ pub const OpenGlRenderer = struct {
         // Geometry is retained between frames; skip the upload when the UI
         // produced the same draw data generation as the last upload.
         if (self.uploaded_generation == null or self.uploaded_generation.? != data.generation) {
-            c.glBindBuffer(c.GL_ARRAY_BUFFER, self.vbo);
-            c.glBufferData(
-                c.GL_ARRAY_BUFFER,
-                @intCast(data.vertices.len * @sizeOf(draw_data.Vertex)),
-                data.vertices.ptr,
-                c.GL_STREAM_DRAW,
-            );
-            c.glBindBuffer(c.GL_ELEMENT_ARRAY_BUFFER, self.ibo);
-            c.glBufferData(
-                c.GL_ELEMENT_ARRAY_BUFFER,
-                @intCast(data.indices.len * @sizeOf(u32)),
-                data.indices.ptr,
-                c.GL_STREAM_DRAW,
-            );
+            uploadVertexBuffer(self.vbo, data.vertices, &self.vertex_buffer_capacity);
+            uploadIndexBuffer(self.ibo, data.indices, &self.index_buffer_capacity);
             self.uploaded_generation = data.generation;
         }
 
         for (data.batches) |batch| {
             if (batch.index_count == 0) continue;
+            const native_texture = if (batch.texture == .none)
+                self.white_texture
+            else
+                self.resolveTexture(batch.texture) orelse continue;
             const scissor = scissorRect(batch.clip_rect, self.logical_width, self.logical_height, self.framebuffer_width, self.framebuffer_height);
             c.glScissor(scissor.x, scissor.y, scissor.w, scissor.h);
-            c.glBindTexture(c.GL_TEXTURE_2D, if (batch.texture_id == 0) self.white_texture else batch.texture_id);
+            c.glBindTexture(c.GL_TEXTURE_2D, native_texture);
             c.glDrawElements(
                 c.GL_TRIANGLES,
                 @intCast(batch.index_count),
@@ -152,8 +154,7 @@ pub const OpenGlRenderer = struct {
         c.glUseProgram(0);
     }
 
-    pub fn createTextureRgba(self: *OpenGlRenderer, width: u32, height: u32, pixels: []const u8) !u32 {
-        _ = self;
+    pub fn createTextureRgba(self: *OpenGlRenderer, width: u32, height: u32, pixels: []const u8) !types.TextureHandle {
         try validateTexturePixels(width, height, pixels);
 
         var texture: c.GLuint = 0;
@@ -179,24 +180,42 @@ pub const OpenGlRenderer = struct {
         c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_S, c.GL_CLAMP_TO_EDGE);
         c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_T, c.GL_CLAMP_TO_EDGE);
         c.glBindTexture(c.GL_TEXTURE_2D, 0);
-        return texture;
+        return self.registerTexture(texture, true) catch |err| {
+            c.glDeleteTextures(1, &texture);
+            return err;
+        };
     }
 
-    /// Releases a texture created by `createTextureRgba` and clears the caller's id.
-    pub fn destroyTexture(self: *OpenGlRenderer, texture_id: *u32) void {
-        _ = self;
-        if (texture_id.* == 0) return;
-        c.glDeleteTextures(1, texture_id);
-        texture_id.* = 0;
+    /// Registers a texture whose OpenGL lifetime remains owned by the caller.
+    pub fn registerExternalTexture(self: *OpenGlRenderer, native: u32) !types.TextureHandle {
+        if (native == 0) return error.InvalidTexture;
+        return self.registerTexture(native, false);
     }
 
-    pub fn uploadTextureRgba(self: *OpenGlRenderer, texture_id: u32, width: u32, height: u32, pixels: []const u8) !void {
-        _ = self;
-        if (texture_id == 0) return error.InvalidTexture;
+    /// Releases a registered texture and clears the caller's handle. Textures
+    /// created by this renderer are deleted; external textures are only unregistered.
+    pub fn destroyTexture(self: *OpenGlRenderer, texture: *types.TextureHandle) void {
+        if (texture.* == .none) return;
+        defer texture.* = .none;
+        const index = texture.*.index() orelse return;
+        if (index >= self.textures.items.len) return;
+        const slot = &self.textures.items[index];
+        if (!slot.alive or slot.generation != texture.*.generation()) return;
+
+        if (slot.owned and slot.native != 0) c.glDeleteTextures(1, &slot.native);
+        slot.native = 0;
+        slot.owned = false;
+        slot.alive = false;
+        slot.generation +%= 1;
+        self.free_textures.append(self.allocator, index) catch {};
+    }
+
+    pub fn uploadTextureRgba(self: *OpenGlRenderer, texture: types.TextureHandle, width: u32, height: u32, pixels: []const u8) !void {
+        const native = self.resolveTexture(texture) orelse return error.InvalidTexture;
         try validateTexturePixels(width, height, pixels);
 
         selectTextureUnit();
-        c.glBindTexture(c.GL_TEXTURE_2D, texture_id);
+        c.glBindTexture(c.GL_TEXTURE_2D, native);
         c.glPixelStorei(c.GL_UNPACK_ALIGNMENT, 1);
         c.glTexImage2D(
             c.GL_TEXTURE_2D,
@@ -213,23 +232,23 @@ pub const OpenGlRenderer = struct {
     }
 
     pub fn syncFontAtlas(self: *OpenGlRenderer, font_atlas: *font_atlas_mod.FontAtlas) !void {
-        if (font_atlas.texture_id == 0) {
-            font_atlas.texture_id = try self.createTextureRgba(font_atlas.width, font_atlas.height, font_atlas.pixels);
+        if (!font_atlas.texture.isValid()) {
+            font_atlas.texture = try self.createTextureRgba(font_atlas.width, font_atlas.height, font_atlas.pixels);
             font_atlas.markClean();
             return;
         }
 
         if (font_atlas.full_upload) {
-            try self.uploadTextureRgba(font_atlas.texture_id, font_atlas.width, font_atlas.height, font_atlas.pixels);
+            try self.uploadTextureRgba(font_atlas.texture, font_atlas.width, font_atlas.height, font_atlas.pixels);
             font_atlas.markClean();
             return;
         }
 
         if (font_atlas.dirty) {
             if (font_atlas.dirty_rect) |rect| {
-                try uploadTextureSubRgba(font_atlas.texture_id, font_atlas.width, rect, font_atlas.pixels);
+                try self.uploadTextureSubRgba(font_atlas.texture, font_atlas.width, rect, font_atlas.pixels);
             } else {
-                try self.uploadTextureRgba(font_atlas.texture_id, font_atlas.width, font_atlas.height, font_atlas.pixels);
+                try self.uploadTextureRgba(font_atlas.texture, font_atlas.width, font_atlas.height, font_atlas.pixels);
             }
             font_atlas.markClean();
         }
@@ -239,14 +258,15 @@ pub const OpenGlRenderer = struct {
         _ = self;
     }
 
-    fn uploadTextureSubRgba(texture_id: u32, atlas_width: u32, rect: font_atlas_mod.DirtyRect, pixels: []const u8) !void {
+    fn uploadTextureSubRgba(self: *OpenGlRenderer, texture: types.TextureHandle, atlas_width: u32, rect: font_atlas_mod.DirtyRect, pixels: []const u8) !void {
         if (rect.w == 0 or rect.h == 0) return;
+        const native = self.resolveTexture(texture) orelse return error.InvalidTexture;
         const row_end = try std.math.mul(usize, @as(usize, rect.y) + rect.h, atlas_width);
         if (row_end * 4 > pixels.len) return error.InvalidTextureData;
 
         const offset = (@as(usize, rect.y) * @as(usize, atlas_width) + @as(usize, rect.x)) * 4;
         selectTextureUnit();
-        c.glBindTexture(c.GL_TEXTURE_2D, texture_id);
+        c.glBindTexture(c.GL_TEXTURE_2D, native);
         c.glPixelStorei(c.GL_UNPACK_ALIGNMENT, 1);
         c.glPixelStorei(c.GL_UNPACK_ROW_LENGTH, @intCast(atlas_width));
         c.glTexSubImage2D(
@@ -264,26 +284,71 @@ pub const OpenGlRenderer = struct {
         c.glBindTexture(c.GL_TEXTURE_2D, 0);
     }
 
+    fn registerTexture(self: *OpenGlRenderer, native: c.GLuint, owned: bool) !types.TextureHandle {
+        if (self.free_textures.pop()) |index| {
+            const slot = &self.textures.items[index];
+            slot.native = native;
+            slot.owned = owned;
+            slot.alive = true;
+            return .fromParts(index, slot.generation);
+        }
+
+        if (self.textures.items.len >= (1 << 24) - 1) return error.TooManyTextures;
+        const index: u32 = @intCast(self.textures.items.len);
+        try self.textures.append(self.allocator, .{
+            .native = native,
+            .owned = owned,
+            .alive = true,
+        });
+        return .fromParts(index, 0);
+    }
+
+    fn resolveTexture(self: *const OpenGlRenderer, texture: types.TextureHandle) ?c.GLuint {
+        const index = texture.index() orelse return null;
+        if (index >= self.textures.items.len) return null;
+        const slot = self.textures.items[index];
+        if (!slot.alive or slot.generation != texture.generation()) return null;
+        return slot.native;
+    }
+
     pub fn versionString() []const u8 {
         const ptr = c.glGetString(c.GL_VERSION) orelse return "unknown";
         return std.mem.span(@as([*:0]const u8, @ptrCast(ptr)));
     }
-
-    fn beginFrameErased(ptr: *anyopaque, width: u32, height: u32) anyerror!void {
-        const self: *OpenGlRenderer = @ptrCast(@alignCast(ptr));
-        try self.beginFrame(width, height);
-    }
-
-    fn renderErased(ptr: *anyopaque, data: draw_data.DrawData) anyerror!void {
-        const self: *OpenGlRenderer = @ptrCast(@alignCast(ptr));
-        try self.render(data);
-    }
-
-    fn endFrameErased(ptr: *anyopaque) anyerror!void {
-        const self: *OpenGlRenderer = @ptrCast(@alignCast(ptr));
-        try self.endFrame();
-    }
 };
+
+fn uploadVertexBuffer(buffer: c.GLuint, data: []const draw_data.Vertex, capacity: *usize) void {
+    const byte_len = data.len * @sizeOf(draw_data.Vertex);
+    c.glBindBuffer(c.GL_ARRAY_BUFFER, buffer);
+    if (byte_len > capacity.*) {
+        capacity.* = nextBufferCapacity(byte_len);
+        c.glBufferData(c.GL_ARRAY_BUFFER, @intCast(capacity.*), null, c.GL_STREAM_DRAW);
+    }
+    c.glBufferSubData(c.GL_ARRAY_BUFFER, 0, @intCast(byte_len), data.ptr);
+}
+
+fn uploadIndexBuffer(buffer: c.GLuint, data: []const u32, capacity: *usize) void {
+    const byte_len = data.len * @sizeOf(u32);
+    c.glBindBuffer(c.GL_ELEMENT_ARRAY_BUFFER, buffer);
+    if (byte_len > capacity.*) {
+        capacity.* = nextBufferCapacity(byte_len);
+        c.glBufferData(c.GL_ELEMENT_ARRAY_BUFFER, @intCast(capacity.*), null, c.GL_STREAM_DRAW);
+    }
+    c.glBufferSubData(c.GL_ELEMENT_ARRAY_BUFFER, 0, @intCast(byte_len), data.ptr);
+}
+
+fn nextBufferCapacity(required: usize) usize {
+    if (required <= 4096) {
+        return 4096;
+    }
+    return std.math.ceilPowerOfTwo(usize, required) catch required;
+}
+
+test "GPU buffer capacity grows geometrically" {
+    try std.testing.expectEqual(@as(usize, 4096), nextBufferCapacity(1));
+    try std.testing.expectEqual(@as(usize, 8192), nextBufferCapacity(4097));
+    try std.testing.expectEqual(@as(usize, 16384), nextBufferCapacity(9000));
+}
 
 fn selectTextureUnit() void {
     c.glActiveTexture(c.GL_TEXTURE0);

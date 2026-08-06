@@ -6,6 +6,7 @@ pub const tab_bar_mod = @import("tab_bar.zig");
 pub const resize_handle_mod = @import("resize_handle.zig");
 pub const image_mod = @import("image.zig");
 pub const primitives_mod = @import("primitives.zig");
+pub const virtual_list = @import("virtual_list.zig");
 pub const dock_space_mod = @import("../docking/dock_space.zig");
 
 pub const panel = panel_mod.panel;
@@ -38,3 +39,6 @@ pub const CardOptions = primitives_mod.CardOptions;
 pub const PillOptions = primitives_mod.PillOptions;
 pub const ButtonVariant = primitives_mod.ButtonVariant;
 pub const ButtonOptions = primitives_mod.ButtonOptions;
+pub const virtualListRange = virtual_list.visibleRange;
+pub const VirtualListOptions = virtual_list.Options;
+pub const VirtualListRange = virtual_list.Range;

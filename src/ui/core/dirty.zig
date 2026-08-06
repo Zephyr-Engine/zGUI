@@ -6,6 +6,7 @@ pub const DirtyFlags = packed struct {
     paint: bool = false,
     text: bool = false,
     children: bool = false,
+    queued: bool = false,
 };
 
 pub fn markLayoutDirty(tree: *tree_mod.UiTree, id: types.NodeId) void {
@@ -13,6 +14,7 @@ pub fn markLayoutDirty(tree: *tree_mod.UiTree, id: types.NodeId) void {
     while (tree.get(current)) |node| {
         node.dirty.layout = true;
         node.dirty.paint = true;
+        tree.queueDirty(current);
         current = node.parent;
         if (current == types.invalid_node) break;
     }
@@ -21,6 +23,7 @@ pub fn markLayoutDirty(tree: *tree_mod.UiTree, id: types.NodeId) void {
 pub fn markPaintDirty(tree: *tree_mod.UiTree, id: types.NodeId) void {
     if (tree.get(id)) |node| {
         node.dirty.paint = true;
+        tree.queueDirty(id);
     }
 }
 
@@ -29,6 +32,7 @@ pub fn markTextDirty(tree: *tree_mod.UiTree, id: types.NodeId) void {
         node.dirty.text = true;
         node.dirty.layout = true;
         node.dirty.paint = true;
+        tree.queueDirty(id);
     }
     markLayoutDirty(tree, id);
 }
@@ -38,6 +42,7 @@ pub fn markChildrenDirty(tree: *tree_mod.UiTree, id: types.NodeId) void {
         node.dirty.children = true;
         node.dirty.layout = true;
         node.dirty.paint = true;
+        tree.queueDirty(id);
     }
     markLayoutDirty(tree, id);
 }

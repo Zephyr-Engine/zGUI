@@ -6,7 +6,7 @@ const paint = @import("../core/paint.zig");
 const draw_data = @import("draw_data.zig");
 const font_atlas_mod = @import("font_atlas.zig");
 
-const white_texture_id: u32 = 0;
+const white_texture: types.TextureHandle = .none;
 const default_clip: types.Rect = .{ .x = 0, .y = 0, .w = 100000, .h = 100000 };
 const max_corner_segments: usize = 10;
 const rounded_point_count: usize = 4 * (max_corner_segments + 1);
@@ -77,7 +77,7 @@ pub const Batcher = struct {
                 .{ .x = 0, .y = 0 },
                 .{ .x = 1, .y = 1 },
                 color,
-                white_texture_id,
+                white_texture,
                 radius,
             );
             return;
@@ -88,7 +88,7 @@ pub const Batcher = struct {
             .{ .x = 0, .y = 0 },
             .{ .x = 1, .y = 1 },
             color,
-            white_texture_id,
+            white_texture,
         );
     }
 
@@ -137,7 +137,7 @@ pub const Batcher = struct {
                 .{ .x = 0, .y = 0 },
                 .{ .x = 1, .y = 1 },
                 border.color,
-                white_texture_id,
+                white_texture,
                 border.radius,
             );
             return;
@@ -150,7 +150,7 @@ pub const Batcher = struct {
         const inner_count = roundedRectPoints(inner, insetRadii(border.radius, border_width), segments, &inner_points);
         if (outer_count < 3 or inner_count != outer_count) return;
 
-        try self.ensureBatch(white_texture_id, self.currentClip());
+        try self.ensureBatch(white_texture, self.currentClip());
         const color = border.color.toU32();
         const base: u32 = @intCast(self.vertices.items.len);
         for (outer_points[0..outer_count]) |point| {
@@ -184,7 +184,7 @@ pub const Batcher = struct {
                     outer,
                     .{ .x = 0, .y = 0 },
                     .{ .x = 1, .y = 1 },
-                    white_texture_id,
+                    white_texture,
                     outer_points[0..outer_count],
                     fringe_points[0..fringe_count],
                     border.color,
@@ -229,7 +229,7 @@ pub const Batcher = struct {
                             .y = snapToRasterPixel(baseline_y + glyph.offset.y, raster_scale),
                             .w = glyph.size.x,
                             .h = glyph.size.y,
-                        }, glyph, text.color, atlas.texture_id);
+                        }, glyph, text.color, atlas.texture);
                     }
 
                     x += glyph.advance;
@@ -240,22 +240,22 @@ pub const Batcher = struct {
     }
 
     fn addImage(self: *Batcher, image: paint.ImagePaint) !void {
-        if (image.texture_id == 0 or image.tint.a == 0) return;
+        if (!image.texture.isValid() or image.tint.a == 0) return;
         if (hasRoundedCorner(image.rect, image.radius)) {
-            try self.addRoundedTexturedRect(image.rect, image.uv0, image.uv1, image.tint, image.texture_id, image.radius);
+            try self.addRoundedTexturedRect(image.rect, image.uv0, image.uv1, image.tint, image.texture, image.radius);
             return;
         }
-        try self.addTexturedRect(image.rect, image.uv0, image.uv1, image.tint, image.texture_id);
+        try self.addTexturedRect(image.rect, image.uv0, image.uv1, image.tint, image.texture);
     }
 
-    fn addGlyphQuad(self: *Batcher, rect: types.Rect, glyph: font_atlas_mod.Glyph, color: types.Color, texture_id: u32) !void {
+    fn addGlyphQuad(self: *Batcher, rect: types.Rect, glyph: font_atlas_mod.Glyph, color: types.Color, texture: types.TextureHandle) !void {
         if (rect.isEmpty()) return;
         try self.addTexturedRect(
             rect,
             .{ .x = glyph.uv0.x, .y = glyph.uv0.y },
             .{ .x = glyph.uv1.x, .y = glyph.uv1.y },
             color,
-            texture_id,
+            texture,
         );
     }
 
@@ -265,10 +265,10 @@ pub const Batcher = struct {
         uv0: types.Vec2,
         uv1: types.Vec2,
         color: types.Color,
-        texture_id: u32,
+        texture: types.TextureHandle,
     ) !void {
         if (rect.isEmpty() or color.a == 0) return;
-        try self.ensureBatch(texture_id, self.currentClip());
+        try self.ensureBatch(texture, self.currentClip());
 
         const base: u32 = @intCast(self.vertices.items.len);
         try self.vertices.append(self.allocator, .{ .pos = .{ rect.x, rect.y }, .uv = .{ uv0.x, uv0.y }, .color = color.toU32() });
@@ -290,12 +290,12 @@ pub const Batcher = struct {
         uv0: types.Vec2,
         uv1: types.Vec2,
         color: types.Color,
-        texture_id: u32,
+        texture: types.TextureHandle,
         radius: style_mod.CornerRadii,
     ) !void {
         if (rect.isEmpty() or color.a == 0) return;
         if (!hasRoundedCorner(rect, radius)) {
-            try self.addTexturedRect(rect, uv0, uv1, color, texture_id);
+            try self.addTexturedRect(rect, uv0, uv1, color, texture);
             return;
         }
 
@@ -304,7 +304,7 @@ pub const Batcher = struct {
         const count = roundedRectPoints(rect, radius, segments, &points);
         if (count < 3) return;
 
-        try self.ensureBatch(texture_id, self.currentClip());
+        try self.ensureBatch(texture, self.currentClip());
         const color_u32 = color.toU32();
         const base: u32 = @intCast(self.vertices.items.len);
         const center: types.Vec2 = .{ .x = rect.x + rect.w * 0.5, .y = rect.y + rect.h * 0.5 };
@@ -342,7 +342,7 @@ pub const Batcher = struct {
                     rect,
                     uv0,
                     uv1,
-                    texture_id,
+                    texture,
                     points[0..count],
                     fringe_points[0..fringe_count],
                     color,
@@ -357,7 +357,7 @@ pub const Batcher = struct {
         uv_rect: types.Rect,
         uv0: types.Vec2,
         uv1: types.Vec2,
-        texture_id: u32,
+        texture: types.TextureHandle,
         inner_points: []const types.Vec2,
         outer_points: []const types.Vec2,
         inner_color: types.Color,
@@ -365,7 +365,7 @@ pub const Batcher = struct {
     ) !void {
         if (inner_points.len < 3 or inner_points.len != outer_points.len) return;
 
-        try self.ensureBatch(texture_id, self.currentClip());
+        try self.ensureBatch(texture, self.currentClip());
         const base: u32 = @intCast(self.vertices.items.len);
         for (inner_points) |point| {
             const uv = uvForPoint(uv_rect, uv0, uv1, point);
@@ -400,14 +400,14 @@ pub const Batcher = struct {
         self.batches.items[self.batches.items.len - 1].index_count += @intCast(self.indices.items.len - offset_before);
     }
 
-    fn ensureBatch(self: *Batcher, texture_id: u32, clip: types.Rect) !void {
+    fn ensureBatch(self: *Batcher, texture: types.TextureHandle, clip: types.Rect) !void {
         if (self.batches.items.len > 0) {
             const last = &self.batches.items[self.batches.items.len - 1];
-            if (last.texture_id == texture_id and rectEqual(last.clip_rect, clip)) return;
+            if (last.texture == texture and rectEqual(last.clip_rect, clip)) return;
         }
 
         try self.batches.append(self.allocator, .{
-            .texture_id = texture_id,
+            .texture = texture,
             .clip_rect = clip,
             .index_offset = @intCast(self.indices.items.len),
             .index_count = 0,
@@ -437,7 +437,7 @@ fn intersectRects(a: types.Rect, b: types.Rect) types.Rect {
     };
 }
 
-fn uniformBorderWidth(widths: anytype) ?f32 {
+fn uniformBorderWidth(widths: style_mod.Edges) ?f32 {
     if (widths.top != widths.right or widths.top != widths.bottom or widths.top != widths.left) return null;
     return widths.top;
 }
@@ -623,7 +623,7 @@ test "text commands emit atlas glyph quads" {
 
     var atlas = try FontAtlas.init(std.testing.allocator, font_bytes, 256, 256);
     defer atlas.deinit();
-    atlas.texture_id = 42;
+    atlas.texture = .fromParts(41, 0);
 
     var batcher = Batcher.init(std.testing.allocator);
     defer batcher.deinit();
@@ -641,6 +641,6 @@ test "text commands emit atlas glyph quads" {
     try std.testing.expectEqual(@as(usize, 8), data.vertices.len);
     try std.testing.expectEqual(@as(usize, 12), data.indices.len);
     try std.testing.expectEqual(@as(usize, 1), data.batches.len);
-    try std.testing.expectEqual(@as(u32, 42), data.batches[0].texture_id);
+    try std.testing.expectEqual(types.TextureHandle.fromParts(41, 0), data.batches[0].texture);
     try std.testing.expect(data.vertices[0].uv[0] > 0);
 }

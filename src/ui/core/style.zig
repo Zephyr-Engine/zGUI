@@ -34,24 +34,7 @@ pub const CornerRadii = struct {
     }
 };
 
-pub const Edges = struct {
-    left: f32 = 0,
-    right: f32 = 0,
-    top: f32 = 0,
-    bottom: f32 = 0,
-
-    pub fn all(v: f32) Edges {
-        return .{ .left = v, .right = v, .top = v, .bottom = v };
-    }
-
-    pub fn horizontal(self: Edges) f32 {
-        return self.left + self.right;
-    }
-
-    pub fn vertical(self: Edges) f32 {
-        return self.top + self.bottom;
-    }
-};
+pub const Edges = types.Edges;
 
 pub const Style = struct {
     width: Size = .hug,

@@ -2,13 +2,15 @@ const std = @import("std");
 const types = @import("types.zig");
 const tree_mod = @import("tree.zig");
 const layout_mod = @import("layout.zig");
-const text_mod = @import("text.zig");
 const input_mod = @import("input.zig");
 const paint_mod = @import("paint.zig");
 const theme_mod = @import("../theme.zig");
 const platform_events = @import("../platform/events.zig");
 const batcher_mod = @import("../render/batcher.zig");
 const draw_data_mod = @import("../render/draw_data.zig");
+const node_mod = @import("node.zig");
+const style_mod = @import("style.zig");
+const dirty_mod = @import("dirty.zig");
 
 const scroll_wheel_scale: f32 = 46;
 const scroll_animation_rate: f32 = 18;
@@ -28,13 +30,20 @@ pub const UiStats = struct {
     index_count: u32 = 0,
     batch_count: u32 = 0,
     draw_call_count: u32 = 0,
-    frame_alloc_count: u32 = 0,
 };
 
 pub const InputCapture = struct {
     wants_mouse: bool = false,
+    has_pointer_capture: bool = false,
     wants_keyboard: bool = false,
     wants_text_input: bool = false,
+};
+
+pub const Interaction = struct {
+    hovered: bool = false,
+    active: bool = false,
+    focused: bool = false,
+    clicked: bool = false,
 };
 
 pub const Ui = struct {
@@ -49,14 +58,15 @@ pub const Ui = struct {
     dt: f32 = 0,
     stats: UiStats = .{},
     current_draw_data: draw_data_mod.DrawData = .empty,
-    text_measurer: ?text_mod.TextMeasurer = null,
     font_atlas: ?*batcher_mod.FontAtlas = null,
     text_raster_scale: f32 = 1,
     theme: theme_mod.Theme = theme_mod.zephyr_dark,
     requested_cursor: platform_events.CursorKind = .arrow,
+    pointer_capture: bool = false,
     force_layout: bool = true,
     force_paint: bool = true,
     draw_generation: u32 = 0,
+    scroll_animation_active: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) !Ui {
         var tree = tree_mod.UiTree.init(allocator);
@@ -89,6 +99,7 @@ pub const Ui = struct {
         self.window_size = frame.window_size;
         self.dt = frame.dt;
         self.requested_cursor = .arrow;
+        self.pointer_capture = false;
         self.input.beginFrame();
         for (frame.events) |event| {
             input_mod.applyEvent(&self.input, event);
@@ -97,26 +108,26 @@ pub const Ui = struct {
     }
 
     pub fn endFrame(self: *Ui) !void {
-        var dirty_layout_count: u32 = 0;
-        var dirty_paint_count: u32 = 0;
-        for (self.tree.nodes.items) |node| {
-            if (node.generation == 0) continue;
-            if (node.dirty.layout) dirty_layout_count += 1;
-            if (node.dirty.paint) dirty_paint_count += 1;
-        }
+        const dirty_counts = self.tree.dirtyCounts();
+        const dirty_layout_count = dirty_counts.layout;
+        const dirty_paint_count = dirty_counts.paint;
 
         const resized = self.window_size.x != self.last_window_size.x or
             self.window_size.y != self.last_window_size.y;
         const needs_layout = self.force_layout or resized or dirty_layout_count > 0;
 
         if (needs_layout) {
-            layout_mod.layoutTree(&self.tree, self.root, self.window_size, self.text_measurer);
+            layout_mod.layoutTree(&self.tree, self.root, self.window_size, self.font_atlas);
         }
 
         const input_scroll = self.applyScrollInput();
-        const scrolled = self.updateScrollNode(self.root) or input_scroll;
+        const scrolled = if (input_scroll or self.scroll_animation_active)
+            self.updateScrollNode(self.root) or input_scroll
+        else
+            false;
+        self.scroll_animation_active = scrolled;
         if (scrolled) {
-            layout_mod.layoutTree(&self.tree, self.root, self.window_size, self.text_measurer);
+            layout_mod.layoutTree(&self.tree, self.root, self.window_size, self.font_atlas);
         }
 
         const needs_paint = self.force_paint or needs_layout or scrolled or dirty_paint_count > 0;
@@ -132,17 +143,11 @@ pub const Ui = struct {
         self.force_layout = false;
         self.force_paint = false;
         self.updateStats(dirty_layout_count, dirty_paint_count);
-        self.clearDirty();
-    }
-
-    pub fn setTextMeasurer(self: *Ui, text_measurer: ?text_mod.TextMeasurer) void {
-        self.text_measurer = text_measurer;
-        self.invalidateTextMeasurements();
+        self.tree.clearTrackedDirty();
     }
 
     pub fn setFontAtlas(self: *Ui, font_atlas: ?*batcher_mod.FontAtlas) void {
         self.font_atlas = font_atlas;
-        self.text_measurer = if (font_atlas) |atlas| atlas.textMeasurer() else null;
         self.invalidateTextMeasurements();
     }
 
@@ -169,6 +174,98 @@ pub const Ui = struct {
         return self.current_draw_data;
     }
 
+    pub fn rootNode(self: *const Ui) types.NodeId {
+        return self.root;
+    }
+
+    pub fn setStyle(self: *Ui, id: types.NodeId, next_style: style_mod.Style) !void {
+        const node = self.tree.get(id) orelse return error.InvalidNode;
+        if (std.meta.eql(node.style, next_style)) return;
+        const layout_changed = !layoutStyleEqual(node.style, next_style);
+        node.style = next_style;
+        if (layout_changed) {
+            dirty_mod.markLayoutDirty(&self.tree, id);
+        } else {
+            dirty_mod.markPaintDirty(&self.tree, id);
+        }
+    }
+
+    pub fn nodeStyle(self: *const Ui, id: types.NodeId) ?style_mod.Style {
+        const node = self.tree.getConst(id) orelse return null;
+        return node.style;
+    }
+
+    pub fn setVisible(self: *Ui, id: types.NodeId, visible: bool) !void {
+        const node = self.tree.get(id) orelse return error.InvalidNode;
+        if (node.flags.visible == visible) return;
+        node.flags.visible = visible;
+        dirty_mod.markLayoutDirty(&self.tree, id);
+    }
+
+    pub fn setInteractive(self: *Ui, id: types.NodeId, interactive: bool) !void {
+        const node = self.tree.get(id) orelse return error.InvalidNode;
+        if (node.flags.interactive == interactive) return;
+        node.flags.interactive = interactive;
+        dirty_mod.markPaintDirty(&self.tree, id);
+    }
+
+    pub fn setText(self: *Ui, id: types.NodeId, bytes: []const u8) !void {
+        try self.tree.setText(id, bytes);
+    }
+
+    pub fn setImage(self: *Ui, id: types.NodeId, image: node_mod.Image) !void {
+        const node = self.tree.get(id) orelse return error.InvalidNode;
+        if (node.image) |existing| {
+            if (std.meta.eql(existing, image)) {
+                return;
+            }
+        }
+        node.image = image;
+        dirty_mod.markPaintDirty(&self.tree, id);
+    }
+
+    pub fn bounds(self: *const Ui, id: types.NodeId) ?types.Rect {
+        const node = self.tree.getConst(id) orelse return null;
+        return node.bounds;
+    }
+
+    pub fn interaction(self: *const Ui, id: types.NodeId) Interaction {
+        return .{
+            .hovered = self.input.hovered == id,
+            .active = self.input.active == id,
+            .focused = self.input.focused == id,
+            .clicked = self.input.clicked == id,
+        };
+    }
+
+    pub fn clicked(self: *const Ui, id: types.NodeId) bool {
+        return self.input.clicked == id;
+    }
+
+    pub fn mousePosition(self: *const Ui) types.Vec2 {
+        return self.input.mouse_pos;
+    }
+
+    pub fn mouseDown(self: *const Ui, button: platform_events.MouseButton) bool {
+        return input_mod.mouseDown(self.input, button);
+    }
+
+    pub fn mousePressed(self: *const Ui, button: platform_events.MouseButton) bool {
+        return input_mod.mousePressed(self.input, button);
+    }
+
+    pub fn mouseReleased(self: *const Ui, button: platform_events.MouseButton) bool {
+        return input_mod.mouseReleased(self.input, button);
+    }
+
+    pub fn statsSnapshot(self: *const Ui) UiStats {
+        return self.stats;
+    }
+
+    pub fn capturePointer(self: *Ui) void {
+        self.pointer_capture = true;
+    }
+
     pub fn requestCursor(self: *Ui, cursor: platform_events.CursorKind) void {
         self.requested_cursor = cursor;
     }
@@ -179,7 +276,8 @@ pub const Ui = struct {
 
     pub fn inputCapture(self: *const Ui) InputCapture {
         return .{
-            .wants_mouse = self.input.hovered != types.invalid_node or self.input.active != types.invalid_node,
+            .wants_mouse = self.pointer_capture or self.input.hovered != types.invalid_node or self.input.active != types.invalid_node,
+            .has_pointer_capture = self.pointer_capture or self.input.active != types.invalid_node,
             .wants_keyboard = self.input.focused != types.invalid_node,
             // zGUI does not yet have text-edit widgets that capture IME/text input.
             .wants_text_input = false,
@@ -203,12 +301,6 @@ pub const Ui = struct {
         };
     }
 
-    fn clearDirty(self: *Ui) void {
-        for (self.tree.nodes.items) |*node| {
-            if (node.generation != 0) node.dirty = .{};
-        }
-    }
-
     fn applyScrollInput(self: *Ui) bool {
         if (self.input.scroll_delta.x == 0 and self.input.scroll_delta.y == 0) return false;
         const target = scrollTargetAt(&self.tree, self.root, self.input.mouse_pos, self.input.scroll_delta) orelse return false;
@@ -227,6 +319,7 @@ pub const Ui = struct {
         if (changed) {
             node.dirty.layout = true;
             node.dirty.paint = true;
+            self.tree.queueDirty(target);
         }
         return changed;
     }
@@ -249,6 +342,7 @@ pub const Ui = struct {
         if (changed) {
             node.dirty.layout = true;
             node.dirty.paint = true;
+            self.tree.queueDirty(id);
         }
 
         var child = node.first_child;
@@ -260,6 +354,22 @@ pub const Ui = struct {
         return changed;
     }
 };
+
+fn layoutStyleEqual(a: style_mod.Style, b: style_mod.Style) bool {
+    return std.meta.eql(a.width, b.width) and
+        std.meta.eql(a.height, b.height) and
+        a.min_width == b.min_width and
+        a.min_height == b.min_height and
+        std.meta.eql(a.padding, b.padding) and
+        std.meta.eql(a.margin, b.margin) and
+        a.gap == b.gap and
+        a.direction == b.direction and
+        a.overflow_x == b.overflow_x and
+        a.overflow_y == b.overflow_y and
+        a.border_width == b.border_width and
+        std.meta.eql(a.border_edges, b.border_edges) and
+        a.font_size == b.font_size;
+}
 
 fn scrollTargetAt(tree: *const tree_mod.UiTree, id: types.NodeId, pos: types.Vec2, delta: types.Vec2) ?types.NodeId {
     const node = tree.getConst(id) orelse return null;
@@ -276,13 +386,13 @@ fn scrollTargetAt(tree: *const tree_mod.UiTree, id: types.NodeId, pos: types.Vec
     return null;
 }
 
-fn canScrollForDelta(node: anytype, delta: types.Vec2) bool {
+fn canScrollForDelta(node: *const node_mod.Node, delta: types.Vec2) bool {
     if (delta.x != 0 and node.style.overflow_x == .scroll and maxScroll(node, .x) > 0) return true;
     if (delta.y != 0 and node.style.overflow_y == .scroll and maxScroll(node, .y) > 0) return true;
     return false;
 }
 
-fn clampScroll(node: anytype) void {
+fn clampScroll(node: *node_mod.Node) void {
     const max_x = maxScroll(node, .x);
     const max_y = maxScroll(node, .y);
     if (node.style.overflow_x == .scroll) {
@@ -301,7 +411,7 @@ fn clampScroll(node: anytype) void {
     }
 }
 
-fn animateNodeScroll(node: anytype, dt: f32) bool {
+fn animateNodeScroll(node: *node_mod.Node, dt: f32) bool {
     const t = scrollStep(dt);
     const before = node.scroll_offset;
     node.scroll_offset.x = approach(node.scroll_offset.x, node.scroll_target_offset.x, t);
@@ -319,7 +429,7 @@ fn approach(current: f32, target: f32, t: f32) f32 {
     return current + (target - current) * t;
 }
 
-fn maxScroll(node: anytype, axis: enum { x, y }) f32 {
+fn maxScroll(node: *const node_mod.Node, axis: enum { x, y }) f32 {
     const viewport = node.bounds.inset(node.style.padding);
     return switch (axis) {
         .x => @max(0, node.layout.content_size.x - viewport.w),
@@ -355,7 +465,7 @@ test "idle frames reuse draw data and rebuild on change" {
 
     // A style change dirties the node and forces a rebuild.
     ui_state.tree.get(panel).?.style.background = types.Color.rgba(90, 90, 90, 255);
-    ui_state.tree.get(panel).?.dirty.paint = true;
+    dirty_mod.markPaintDirty(&ui_state.tree, panel);
     try ui_state.beginFrame(.{ .events = &.{}, .window_size = .{ .x = 200, .y = 100 } });
     try ui_state.endFrame();
     try std.testing.expect(ui_state.drawData().generation != first_generation);
@@ -428,4 +538,34 @@ test "scroll input updates both overflow axes and clamps to content" {
     try std.testing.expectEqual(@as(f32, 0), ui_state.tree.get(scroller).?.scroll_offset.y);
     try std.testing.expectEqual(@as(f32, 0), ui_state.tree.get(scroller).?.scroll_target_offset.x);
     try std.testing.expectEqual(@as(f32, 0), ui_state.tree.get(scroller).?.scroll_target_offset.y);
+}
+
+test "pointer capture is explicit and resets at the next frame" {
+    var ui_state = try Ui.init(std.testing.allocator);
+    defer ui_state.deinit();
+
+    try ui_state.beginFrame(.{ .window_size = .{ .x = 100, .y = 100 } });
+    ui_state.capturePointer();
+    try std.testing.expect(ui_state.inputCapture().wants_mouse);
+    try std.testing.expect(ui_state.inputCapture().has_pointer_capture);
+
+    try ui_state.beginFrame(.{ .window_size = .{ .x = 100, .y = 100 } });
+    try std.testing.expect(!ui_state.inputCapture().has_pointer_capture);
+}
+
+test "paint-only style changes do not dirty layout" {
+    var ui_state = try Ui.init(std.testing.allocator);
+    defer ui_state.deinit();
+
+    const panel = try ui_state.tree.createNode(.panel);
+    try ui_state.tree.appendChild(ui_state.root, panel);
+    try ui_state.beginFrame(.{ .window_size = .{ .x = 100, .y = 100 } });
+    try ui_state.endFrame();
+
+    var next = ui_state.nodeStyle(panel).?;
+    next.background = types.Color.rgba(10, 20, 30, 255);
+    try ui_state.setStyle(panel, next);
+    const counts = ui_state.tree.dirtyCounts();
+    try std.testing.expectEqual(@as(u32, 0), counts.layout);
+    try std.testing.expectEqual(@as(u32, 1), counts.paint);
 }

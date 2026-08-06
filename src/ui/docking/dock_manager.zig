@@ -5,10 +5,11 @@ const dock_node = @import("dock_node.zig");
 pub const DockManager = struct {
     allocator: std.mem.Allocator,
     nodes: std.ArrayList(dock_node.DockNode) = .empty,
-    // Slots vacated by collapsed splits, reused by appendNode so the nodes
-    // array stays bounded under repeated dock/undock. DockNodeIds are bare
-    // indices: ids for collapsed nodes must not be held across mutations.
-    free_list: std.ArrayList(types.DockNodeId) = .empty,
+    generations: std.ArrayList(u8) = .empty,
+    alive: std.ArrayList(bool) = .empty,
+    // Slots vacated by collapsed splits are reused with a new generation so
+    // the array stays bounded without allowing stale IDs to alias new nodes.
+    free_list: std.ArrayList(u32) = .empty,
     root: types.DockNodeId = types.invalid_dock_node,
     active_resize: ?ResizeState = null,
 
@@ -31,8 +32,12 @@ pub const DockManager = struct {
     }
 
     pub fn deinit(self: *DockManager) void {
-        for (self.nodes.items) |*node| node.deinit(self.allocator);
+        for (self.nodes.items, self.alive.items) |*node, alive| {
+            if (alive) node.deinit(self.allocator);
+        }
         self.nodes.deinit(self.allocator);
+        self.generations.deinit(self.allocator);
+        self.alive.deinit(self.allocator);
         self.free_list.deinit(self.allocator);
         self.* = undefined;
     }
@@ -43,11 +48,11 @@ pub const DockManager = struct {
         target: types.DockNodeId,
         position: dock_node.DockPosition,
     ) !void {
-        if (target == types.invalid_dock_node or target >= self.nodes.items.len) return error.InvalidDockTarget;
+        const target_node = self.resolveNode(target) orelse return error.InvalidDockTarget;
         try self.removeWindow(window, false);
 
         if (position == .center_tab) {
-            switch (self.nodes.items[target]) {
+            switch (target_node.*) {
                 .leaf => |*leaf| {
                     try leaf.tabs.append(self.allocator, window);
                     leaf.active_tab = leaf.tabs.items.len - 1;
@@ -59,7 +64,7 @@ pub const DockManager = struct {
         }
 
         const result = try self.splitNode(target, position, defaultDockSplitRatio(position));
-        switch (self.nodes.items[result.new_leaf]) {
+        switch (self.resolveNode(result.new_leaf).?.*) {
             .leaf => |*leaf| {
                 try leaf.tabs.append(self.allocator, window);
                 leaf.active_tab = leaf.tabs.items.len - 1;
@@ -70,9 +75,9 @@ pub const DockManager = struct {
     }
 
     pub fn moveWindowToLeaf(self: *DockManager, window: types.WindowId, target: types.DockNodeId) !void {
-        if (target == types.invalid_dock_node or target >= self.nodes.items.len) return error.InvalidDockTarget;
+        _ = self.resolveNode(target) orelse return error.InvalidDockTarget;
         try self.removeWindow(window, false);
-        switch (self.nodes.items[target]) {
+        switch (self.resolveNode(target).?.*) {
             .leaf => |*leaf| {
                 try leaf.tabs.append(self.allocator, window);
                 leaf.active_tab = leaf.tabs.items.len - 1;
@@ -88,13 +93,13 @@ pub const DockManager = struct {
         position: dock_node.DockPosition,
         ratio: f32,
     ) !SplitResult {
-        if (target == types.invalid_dock_node or target >= self.nodes.items.len) return error.InvalidDockTarget;
+        const target_index = self.slotIndex(target) orelse return error.InvalidDockTarget;
         if (position == .center_tab) return error.InvalidDockTarget;
 
-        const old = self.nodes.items[target];
-        const new_leaf = dock_node.DockNode{ .leaf = .{} };
+        const old = self.nodes.items[target_index];
+        const new_id = try self.appendNode(.{ .leaf = .{} });
+        errdefer self.releaseSubtree(new_id);
         const old_id = try self.appendNode(old);
-        const new_id = try self.appendNode(new_leaf);
         const axis: dock_node.Axis = switch (position) {
             .left, .right => .x,
             .top, .bottom => .y,
@@ -108,7 +113,7 @@ pub const DockManager = struct {
         };
         const second = if (first == new_id) old_id else new_id;
 
-        self.nodes.items[target] = .{ .split = .{
+        self.nodes.items[target_index] = .{ .split = .{
             .axis = axis,
             .ratio = sanitizeRatio(ratio),
             .first = first,
@@ -127,7 +132,8 @@ pub const DockManager = struct {
     }
 
     fn removeWindow(self: *DockManager, window: types.WindowId, cleanup: bool) !void {
-        for (self.nodes.items) |*node| {
+        for (self.nodes.items, self.alive.items) |*node, alive| {
+            if (!alive) continue;
             switch (node.*) {
                 .leaf => |*leaf| {
                     for (leaf.tabs.items, 0..) |tab, i| {
@@ -147,11 +153,12 @@ pub const DockManager = struct {
     }
 
     pub fn leafForWindow(self: *const DockManager, window: types.WindowId) ?types.DockNodeId {
-        for (self.nodes.items, 0..) |node, i| {
+        for (self.nodes.items, self.alive.items, 0..) |node, alive, i| {
+            if (!alive) continue;
             switch (node) {
                 .leaf => |leaf| {
                     for (leaf.tabs.items) |tab| {
-                        if (tab == window) return @intCast(i);
+                        if (tab == window) return self.idForSlot(i);
                     }
                 },
                 .split => {},
@@ -161,16 +168,16 @@ pub const DockManager = struct {
     }
 
     pub fn activeWindow(self: *const DockManager, leaf_id: types.DockNodeId) ?types.WindowId {
-        if (leaf_id == types.invalid_dock_node or leaf_id >= self.nodes.items.len) return null;
-        return switch (self.nodes.items[leaf_id]) {
+        const leaf_node = self.resolveNodeConst(leaf_id) orelse return null;
+        return switch (leaf_node.*) {
             .leaf => |leaf| if (leaf.tabs.items.len == 0) null else leaf.tabs.items[@min(leaf.active_tab, leaf.tabs.items.len - 1)],
             .split => null,
         };
     }
 
     pub fn setActiveWindow(self: *DockManager, leaf_id: types.DockNodeId, window: types.WindowId) bool {
-        if (leaf_id == types.invalid_dock_node or leaf_id >= self.nodes.items.len) return false;
-        switch (self.nodes.items[leaf_id]) {
+        const leaf_node = self.resolveNode(leaf_id) orelse return false;
+        switch (leaf_node.*) {
             .leaf => |*leaf| {
                 for (leaf.tabs.items, 0..) |tab, i| {
                     if (tab == window) {
@@ -211,8 +218,8 @@ pub const DockManager = struct {
     }
 
     pub fn nodeRect(self: *const DockManager, id: types.DockNodeId) ?types.Rect {
-        if (id == types.invalid_dock_node or id >= self.nodes.items.len) return null;
-        return switch (self.nodes.items[id]) {
+        const dock = self.resolveNodeConst(id) orelse return null;
+        return switch (dock.*) {
             .leaf => |leaf| leaf.rect,
             .split => |split| split.rect,
         };
@@ -269,8 +276,8 @@ pub const DockManager = struct {
     }
 
     fn layoutNode(self: *DockManager, id: types.DockNodeId, rect: types.Rect) void {
-        if (id == types.invalid_dock_node or id >= self.nodes.items.len) return;
-        switch (self.nodes.items[id]) {
+        const dock = self.resolveNode(id) orelse return;
+        switch (dock.*) {
             .leaf => |*leaf| leaf.rect = rect,
             .split => |*split| {
                 split.rect = rect;
@@ -289,49 +296,61 @@ pub const DockManager = struct {
     }
 
     fn appendNode(self: *DockManager, node: dock_node.DockNode) !types.DockNodeId {
-        if (self.free_list.pop()) |id| {
-            self.nodes.items[id] = node;
-            return id;
+        if (self.free_list.pop()) |index| {
+            const generation = if (self.generations.items[index] == std.math.maxInt(u8))
+                1
+            else
+                self.generations.items[index] + 1;
+            self.nodes.items[index] = node;
+            self.generations.items[index] = generation;
+            self.alive.items[index] = true;
+            return types.makeDockNodeId(index, generation);
         }
-        const id: types.DockNodeId = @intCast(self.nodes.items.len);
+        const index: u32 = @intCast(self.nodes.items.len);
+        if (index > types.max_node_index) return error.TooManyDockNodes;
         try self.nodes.append(self.allocator, node);
-        return id;
+        errdefer _ = self.nodes.pop();
+        try self.generations.append(self.allocator, 1);
+        errdefer _ = self.generations.pop();
+        try self.alive.append(self.allocator, true);
+        return types.makeDockNodeId(index, 1);
     }
 
     /// Recycles a subtree that is no longer reachable from the root,
     /// releasing tab storage and returning every slot to the free list.
     fn releaseSubtree(self: *DockManager, id: types.DockNodeId) void {
-        if (id == types.invalid_dock_node or id >= self.nodes.items.len) return;
-        switch (self.nodes.items[id]) {
+        const index = self.slotIndex(id) orelse return;
+        switch (self.nodes.items[index]) {
             .leaf => |*leaf| leaf.tabs.deinit(self.allocator),
             .split => |split| {
                 self.releaseSubtree(split.first);
                 self.releaseSubtree(split.second);
             },
         }
-        self.nodes.items[id] = .{ .leaf = .{} };
-        self.free_list.append(self.allocator, id) catch {};
+        self.nodes.items[index] = .{ .leaf = .{} };
+        self.alive.items[index] = false;
+        self.free_list.append(self.allocator, index) catch {};
     }
 
     fn splitPtr(self: *DockManager, id: types.DockNodeId) ?*dock_node.DockSplit {
-        if (id == types.invalid_dock_node or id >= self.nodes.items.len) return null;
-        return switch (self.nodes.items[id]) {
+        const dock = self.resolveNode(id) orelse return null;
+        return switch (dock.*) {
             .leaf => null,
             .split => |*split| split,
         };
     }
 
     fn splitConstPtr(self: *const DockManager, id: types.DockNodeId) ?*const dock_node.DockSplit {
-        if (id == types.invalid_dock_node or id >= self.nodes.items.len) return null;
-        return switch (self.nodes.items[id]) {
+        const dock = self.resolveNodeConst(id) orelse return null;
+        return switch (dock.*) {
             .leaf => null,
             .split => |*split| split,
         };
     }
 
     fn hitTestResizeHandleNode(self: *const DockManager, id: types.DockNodeId, mouse_pos: types.Vec2, thickness: f32) ?types.DockNodeId {
-        if (id == types.invalid_dock_node or id >= self.nodes.items.len) return null;
-        switch (self.nodes.items[id]) {
+        const dock = self.resolveNodeConst(id) orelse return null;
+        switch (dock.*) {
             .leaf => return null,
             .split => |split| {
                 if (self.hitTestResizeHandleNode(split.first, mouse_pos, thickness)) |hit| return hit;
@@ -343,8 +362,8 @@ pub const DockManager = struct {
     }
 
     fn hitTestLeafNode(self: *const DockManager, id: types.DockNodeId, mouse_pos: types.Vec2) ?types.DockNodeId {
-        if (id == types.invalid_dock_node or id >= self.nodes.items.len) return null;
-        switch (self.nodes.items[id]) {
+        const dock = self.resolveNodeConst(id) orelse return null;
+        switch (dock.*) {
             .leaf => |leaf| return if (leaf.rect.contains(mouse_pos)) id else null,
             .split => |split| {
                 if (self.hitTestLeafNode(split.first, mouse_pos)) |hit| return hit;
@@ -359,8 +378,8 @@ pub const DockManager = struct {
     }
 
     fn collapseEmptyChild(self: *DockManager, id: types.DockNodeId) bool {
-        if (id == types.invalid_dock_node or id >= self.nodes.items.len) return false;
-        switch (self.nodes.items[id]) {
+        const dock = self.resolveNodeConst(id) orelse return false;
+        switch (dock.*) {
             .leaf => |leaf| return leaf.tabs.items.len == 0,
             .split => |split| {
                 const first_empty = self.collapseEmptyChild(split.first);
@@ -381,13 +400,37 @@ pub const DockManager = struct {
     }
 
     fn replaceNodeWith(self: *DockManager, dst: types.DockNodeId, src: types.DockNodeId) void {
-        if (dst == types.invalid_dock_node or dst >= self.nodes.items.len) return;
-        if (src == types.invalid_dock_node or src >= self.nodes.items.len) return;
-        const moved = self.nodes.items[src];
-        self.nodes.items[src] = .{ .leaf = .{} };
-        self.nodes.items[dst] = moved;
+        const dst_index = self.slotIndex(dst) orelse return;
+        const src_index = self.slotIndex(src) orelse return;
+        const moved = self.nodes.items[src_index];
+        self.nodes.items[src_index] = .{ .leaf = .{} };
+        self.nodes.items[dst_index] = moved;
+        self.alive.items[src_index] = false;
         // The src slot's content now lives at dst; recycle the vacated slot.
-        self.free_list.append(self.allocator, src) catch {};
+        self.free_list.append(self.allocator, src_index) catch {};
+    }
+
+    pub fn resolveNode(self: *DockManager, id: types.DockNodeId) ?*dock_node.DockNode {
+        const index = self.slotIndex(id) orelse return null;
+        return &self.nodes.items[index];
+    }
+
+    pub fn resolveNodeConst(self: *const DockManager, id: types.DockNodeId) ?*const dock_node.DockNode {
+        const index = self.slotIndex(id) orelse return null;
+        return &self.nodes.items[index];
+    }
+
+    pub fn idForSlot(self: *const DockManager, index: usize) ?types.DockNodeId {
+        if (index >= self.nodes.items.len or !self.alive.items[index]) return null;
+        return types.makeDockNodeId(@intCast(index), self.generations.items[index]);
+    }
+
+    fn slotIndex(self: *const DockManager, id: types.DockNodeId) ?u32 {
+        if (id == types.invalid_dock_node) return null;
+        const index = types.dockNodeIndex(id);
+        if (index >= self.nodes.items.len or !self.alive.items[index]) return null;
+        if (self.generations.items[index] != types.dockNodeGeneration(id)) return null;
+        return index;
     }
 };
 
@@ -520,6 +563,25 @@ test "repeated dock and undock reuses node slots" {
     try std.testing.expectEqual(baseline, dock.nodes.items.len);
     try std.testing.expect(dock.leafForWindow(a) != null);
     try std.testing.expect(dock.leafForWindow(b) != null);
+}
+
+test "reused dock slots reject stale handles" {
+    var dock = try DockManager.init(std.testing.allocator);
+    defer dock.deinit();
+
+    const a: types.WindowId = 1;
+    const b: types.WindowId = 2;
+    try dock.moveWindowToLeaf(a, dock.root);
+    try dock.dockWindow(b, dock.root, .right);
+    const stale = dock.leafForWindow(b).?;
+
+    try dock.undockWindow(b);
+    try std.testing.expect(dock.resolveNodeConst(stale) == null);
+
+    try dock.dockWindow(b, dock.leafForWindow(a).?, .right);
+    const reused = dock.leafForWindow(b).?;
+    try std.testing.expect(stale != reused);
+    try std.testing.expectEqual(types.dockNodeIndex(stale), types.dockNodeIndex(reused));
 }
 
 test "redocking center leaf into right leaf preserves surrounding dock tree" {

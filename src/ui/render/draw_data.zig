@@ -7,7 +7,7 @@ pub const Vertex = extern struct {
 };
 
 pub const DrawBatch = struct {
-    texture_id: u32 = 0,
+    texture: types.TextureHandle = .none,
     clip_rect: types.Rect = .{},
     index_offset: u32 = 0,
     index_count: u32 = 0,

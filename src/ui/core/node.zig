@@ -13,7 +13,7 @@ pub const NodeKind = enum {
 };
 
 pub const Image = struct {
-    texture_id: u32 = 0,
+    texture: types.TextureHandle = .none,
     uv0: types.Vec2 = .{ .x = 0, .y = 0 },
     uv1: types.Vec2 = .{ .x = 1, .y = 1 },
     tint: types.Color = types.Color.rgba(255, 255, 255, 255),
@@ -31,6 +31,7 @@ pub const NodeFlags = packed struct {
 pub const Node = struct {
     id: types.NodeId,
     generation: u8,
+    alive: bool = true,
 
     kind: NodeKind,
 
@@ -50,8 +51,10 @@ pub const Node = struct {
 
     flags: NodeFlags = .{},
 
-    /// Owned by the tree; set via UiTree.setText, freed on destroy.
+    /// View into `text_storage`; updated through UiTree.setText.
     text: ?[]const u8 = null,
+    /// Retained allocation used by changing labels to avoid per-update churn.
+    text_storage: ?[]u8 = null,
     image: ?Image = null,
 
     // Cached text measurement, valid while the text is unchanged and the

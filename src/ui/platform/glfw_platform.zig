@@ -1,7 +1,14 @@
 const std = @import("std");
-const types = @import("../core/types.zig");
-const events = @import("events.zig");
-const platform_mod = @import("platform.zig");
+const ui = @import("zGUI");
+const types = struct {
+    const Vec2 = ui.Vec2;
+};
+const events = struct {
+    const PlatformEvent = ui.PlatformEvent;
+    const CursorKind = ui.CursorKind;
+    const MouseButton = ui.MouseButton;
+    const Key = ui.Key;
+};
 
 const c = @cImport({
     @cInclude("GLFW/glfw3.h");
@@ -66,18 +73,6 @@ pub const GlfwPlatform = struct {
         self.text_buffer.deinit(self.allocator);
         self.clipboard_buffer.deinit(self.allocator);
         self.* = undefined;
-    }
-
-    pub fn platform(self: *GlfwPlatform) platform_mod.Platform {
-        self.installCallbacks();
-        return .{
-            .ptr = self,
-            .pollEventsFn = pollEventsErased,
-            .getWindowSizeFn = getWindowSizeErased,
-            .setCursorFn = setCursorErased,
-            .getClipboardFn = getClipboardErased,
-            .setClipboardFn = setClipboardErased,
-        };
     }
 
     pub fn pollEvents(self: *GlfwPlatform) []const events.PlatformEvent {
@@ -183,31 +178,6 @@ pub const GlfwPlatform = struct {
 
     fn appendEvent(self: *GlfwPlatform, event: events.PlatformEvent) void {
         self.events.append(self.allocator, event) catch {};
-    }
-
-    fn pollEventsErased(ptr: *anyopaque) []const events.PlatformEvent {
-        const self: *GlfwPlatform = @ptrCast(@alignCast(ptr));
-        return self.pollEvents();
-    }
-
-    fn getWindowSizeErased(ptr: *anyopaque) types.Vec2 {
-        const self: *GlfwPlatform = @ptrCast(@alignCast(ptr));
-        return self.getWindowSize();
-    }
-
-    fn setCursorErased(ptr: *anyopaque, cursor: events.CursorKind) void {
-        const self: *GlfwPlatform = @ptrCast(@alignCast(ptr));
-        self.setCursor(cursor);
-    }
-
-    fn getClipboardErased(ptr: *anyopaque) []const u8 {
-        const self: *GlfwPlatform = @ptrCast(@alignCast(ptr));
-        return self.getClipboard();
-    }
-
-    fn setClipboardErased(ptr: *anyopaque, text: []const u8) void {
-        const self: *GlfwPlatform = @ptrCast(@alignCast(ptr));
-        self.setClipboard(text);
     }
 
     fn fromWindow(window: ?*c.GLFWwindow) ?*GlfwPlatform {

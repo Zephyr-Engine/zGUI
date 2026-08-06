@@ -2,10 +2,17 @@ const std = @import("std");
 const types = @import("types.zig");
 const node_mod = @import("node.zig");
 
+pub const DirtyCounts = struct {
+    layout: u32 = 0,
+    paint: u32 = 0,
+};
+
 pub const UiTree = struct {
     allocator: std.mem.Allocator,
     nodes: std.ArrayList(node_mod.Node) = .empty,
     free_list: std.ArrayList(u32) = .empty,
+    dirty_nodes: std.ArrayList(types.NodeId) = .empty,
+    dirty_tracking_lost: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) UiTree {
         return .{ .allocator = allocator };
@@ -13,10 +20,11 @@ pub const UiTree = struct {
 
     pub fn deinit(self: *UiTree) void {
         for (self.nodes.items) |*node| {
-            if (node.text) |text| self.allocator.free(text);
+            if (node.text_storage) |storage| self.allocator.free(storage);
         }
         self.nodes.deinit(self.allocator);
         self.free_list.deinit(self.allocator);
+        self.dirty_nodes.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -26,6 +34,8 @@ pub const UiTree = struct {
             const next_generation: u8 = if (slot.generation == std.math.maxInt(u8)) 1 else slot.generation + 1;
             const id = types.makeNodeId(index, next_generation);
             slot.* = node_mod.Node.init(id, next_generation, kind);
+            try self.dirty_nodes.append(self.allocator, id);
+            slot.dirty.queued = true;
             return id;
         }
 
@@ -33,6 +43,8 @@ pub const UiTree = struct {
         if (index > types.max_node_index) return error.TooManyNodes;
         const id = types.makeNodeId(index, 1);
         try self.nodes.append(self.allocator, node_mod.Node.init(id, 1, kind));
+        try self.dirty_nodes.append(self.allocator, id);
+        self.nodes.items[index].dirty.queued = true;
         return id;
     }
 
@@ -50,9 +62,10 @@ pub const UiTree = struct {
             node = self.get(id) orelse return;
         }
 
-        if (node.text) |text| self.allocator.free(text);
+        if (node.text_storage) |storage| self.allocator.free(storage);
         node.text = null;
-        node.generation = 0;
+        node.text_storage = null;
+        node.alive = false;
         node.parent = types.invalid_node;
         node.first_child = types.invalid_node;
         node.last_child = types.invalid_node;
@@ -70,12 +83,29 @@ pub const UiTree = struct {
         if (node.text) |existing| {
             if (std.mem.eql(u8, existing, bytes)) return;
         }
-        const owned = try self.allocator.dupe(u8, bytes);
-        if (node.text) |existing| self.allocator.free(existing);
-        node.text = owned;
+        if (node.text_storage) |storage| {
+            if (storage.len >= bytes.len) {
+                @memcpy(storage[0..bytes.len], bytes);
+                node.text = storage[0..bytes.len];
+            } else {
+                const capacity = @max(bytes.len, storage.len * 2);
+                const next = try self.allocator.alloc(u8, capacity);
+                @memcpy(next[0..bytes.len], bytes);
+                self.allocator.free(storage);
+                node.text_storage = next;
+                node.text = next[0..bytes.len];
+            }
+        } else {
+            const capacity = @max(bytes.len, 16);
+            const storage = try self.allocator.alloc(u8, capacity);
+            @memcpy(storage[0..bytes.len], bytes);
+            node.text_storage = storage;
+            node.text = storage[0..bytes.len];
+        }
         node.dirty.text = true;
         node.dirty.layout = true;
         node.dirty.paint = true;
+        self.queueDirty(id);
     }
 
     pub fn appendChild(self: *UiTree, parent: types.NodeId, child: types.NodeId) !void {
@@ -104,6 +134,7 @@ pub const UiTree = struct {
         parent_node.dirty.children = true;
         parent_node.dirty.layout = true;
         parent_node.dirty.paint = true;
+        self.queueDirty(parent);
     }
 
     pub fn removeChild(self: *UiTree, parent: types.NodeId, child: types.NodeId) void {
@@ -129,6 +160,7 @@ pub const UiTree = struct {
         parent_node.dirty.children = true;
         parent_node.dirty.layout = true;
         parent_node.dirty.paint = true;
+        self.queueDirty(parent);
     }
 
     pub fn get(self: *UiTree, id: types.NodeId) ?*node_mod.Node {
@@ -136,7 +168,7 @@ pub const UiTree = struct {
         const index = types.nodeIndex(id);
         if (index >= self.nodes.items.len) return null;
         const node = &self.nodes.items[index];
-        if (node.generation == 0 or node.generation != types.nodeGeneration(id)) return null;
+        if (!node.alive or node.generation != types.nodeGeneration(id)) return null;
         return node;
     }
 
@@ -145,8 +177,50 @@ pub const UiTree = struct {
         const index = types.nodeIndex(id);
         if (index >= self.nodes.items.len) return null;
         const node = &self.nodes.items[index];
-        if (node.generation == 0 or node.generation != types.nodeGeneration(id)) return null;
+        if (!node.alive or node.generation != types.nodeGeneration(id)) return null;
         return node;
+    }
+
+    pub fn queueDirty(self: *UiTree, id: types.NodeId) void {
+        const node = self.get(id) orelse return;
+        if (node.dirty.queued) return;
+        self.dirty_nodes.append(self.allocator, id) catch {
+            self.dirty_tracking_lost = true;
+            return;
+        };
+        node.dirty.queued = true;
+    }
+
+    pub fn dirtyCounts(self: *const UiTree) DirtyCounts {
+        var result: DirtyCounts = .{};
+        if (self.dirty_tracking_lost) {
+            for (self.nodes.items) |node| {
+                if (!node.alive) continue;
+                if (node.dirty.layout) result.layout += 1;
+                if (node.dirty.paint) result.paint += 1;
+            }
+            return result;
+        }
+        for (self.dirty_nodes.items) |id| {
+            const node = self.getConst(id) orelse continue;
+            if (node.dirty.layout) result.layout += 1;
+            if (node.dirty.paint) result.paint += 1;
+        }
+        return result;
+    }
+
+    pub fn clearTrackedDirty(self: *UiTree) void {
+        if (self.dirty_tracking_lost) {
+            for (self.nodes.items) |*node| {
+                if (node.alive) node.dirty = .{};
+            }
+        } else {
+            for (self.dirty_nodes.items) |id| {
+                if (self.get(id)) |node| node.dirty = .{};
+            }
+        }
+        self.dirty_nodes.clearRetainingCapacity();
+        self.dirty_tracking_lost = false;
     }
 };
 
@@ -229,4 +303,37 @@ test "setText copies into tree-owned storage and skips unchanged text" {
     try tree.setText(label, "hello 2");
     try std.testing.expect(tree.get(label).?.dirty.text);
     try std.testing.expectEqualStrings("hello 2", tree.get(label).?.text.?);
+}
+
+test "setText reuses retained capacity for changing labels" {
+    var tree = UiTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const label = try tree.createNode(.label);
+    try tree.setText(label, "a longer value");
+    const storage_ptr = tree.get(label).?.text_storage.?.ptr;
+
+    try tree.setText(label, "short");
+    try std.testing.expectEqual(storage_ptr, tree.get(label).?.text_storage.?.ptr);
+    try std.testing.expectEqualStrings("short", tree.get(label).?.text.?);
+}
+
+test "dirty queue tracks the changed subset of a large retained tree" {
+    var tree = UiTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const root = try tree.createNode(.root);
+    var last = root;
+    var i: usize = 0;
+    while (i < 10_000) : (i += 1) {
+        const panel = try tree.createNode(.panel);
+        try tree.appendChild(root, panel);
+        last = panel;
+    }
+    tree.clearTrackedDirty();
+
+    tree.get(last).?.dirty.paint = true;
+    tree.queueDirty(last);
+    try std.testing.expectEqual(@as(usize, 1), tree.dirty_nodes.items.len);
+    try std.testing.expectEqual(@as(u32, 1), tree.dirtyCounts().paint);
 }

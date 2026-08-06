@@ -34,7 +34,7 @@ pub const TextPaint = struct {
 
 pub const ImagePaint = struct {
     rect: types.Rect,
-    texture_id: u32,
+    texture: types.TextureHandle,
     uv0: types.Vec2 = .{ .x = 0, .y = 0 },
     uv1: types.Vec2 = .{ .x = 1, .y = 1 },
     tint: types.Color = types.Color.rgba(255, 255, 255, 255),
@@ -91,11 +91,11 @@ pub fn buildPaintList(tree: *const tree_mod.UiTree, root: types.NodeId, list: *P
     }
 
     if (node.image) |image| {
-        if (image.texture_id != 0 and !node.bounds.isEmpty()) {
+        if (image.texture.isValid() and !node.bounds.isEmpty()) {
             const image_rect = if (node.kind == .button) node.bounds.inset(node.style.padding) else node.bounds;
             try list.append(.{ .image = .{
                 .rect = image_rect,
-                .texture_id = image.texture_id,
+                .texture = image.texture,
                 .uv0 = image.uv0,
                 .uv1 = image.uv1,
                 .tint = image.tint,

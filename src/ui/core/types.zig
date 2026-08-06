@@ -9,6 +9,25 @@ pub const Vec2 = struct {
     }
 };
 
+pub const Edges = struct {
+    left: f32 = 0,
+    right: f32 = 0,
+    top: f32 = 0,
+    bottom: f32 = 0,
+
+    pub fn all(v: f32) Edges {
+        return .{ .left = v, .right = v, .top = v, .bottom = v };
+    }
+
+    pub fn horizontal(self: Edges) f32 {
+        return self.left + self.right;
+    }
+
+    pub fn vertical(self: Edges) f32 {
+        return self.top + self.bottom;
+    }
+};
+
 pub const Rect = struct {
     x: f32 = 0,
     y: f32 = 0,
@@ -24,7 +43,7 @@ pub const Rect = struct {
         return self.w <= 0 or self.h <= 0;
     }
 
-    pub fn inset(self: Rect, edges: anytype) Rect {
+    pub fn inset(self: Rect, edges: Edges) Rect {
         return .{
             .x = self.x + edges.left,
             .y = self.y + edges.top,
@@ -57,7 +76,39 @@ pub const Color = packed struct {
 /// that later reused the same slot.
 pub const NodeId = u32;
 pub const WindowId = u32;
+/// DockNodeId uses the same slot-plus-generation encoding as NodeId. A handle
+/// to a collapsed dock node cannot resolve after its storage slot is reused.
 pub const DockNodeId = u32;
+
+/// Renderer texture handle. The handle is intentionally opaque to widgets and
+/// draw-data consumers; renderer backends are responsible for translating it
+/// to their native texture representation.
+pub const TextureHandle = enum(u32) {
+    none = 0,
+    _,
+
+    const index_bits = 24;
+    const index_mask: u32 = (1 << index_bits) - 1;
+
+    pub fn fromParts(index_value: u32, generation_value: u8) TextureHandle {
+        std.debug.assert(index_value < index_mask);
+        return @enumFromInt((@as(u32, generation_value) << index_bits) | (index_value + 1));
+    }
+
+    pub fn index(self: TextureHandle) ?u32 {
+        const encoded_index = @intFromEnum(self) & index_mask;
+        if (encoded_index == 0) return null;
+        return encoded_index - 1;
+    }
+
+    pub fn generation(self: TextureHandle) u8 {
+        return @intCast(@intFromEnum(self) >> index_bits);
+    }
+
+    pub fn isValid(self: TextureHandle) bool {
+        return self != .none;
+    }
+};
 
 pub const node_index_bits = 24;
 pub const node_index_mask: u32 = (1 << node_index_bits) - 1;
@@ -75,6 +126,18 @@ pub fn nodeGeneration(id: NodeId) u8 {
     return @intCast(id >> node_index_bits);
 }
 
+pub fn makeDockNodeId(index: u32, generation: u8) DockNodeId {
+    return (@as(u32, generation) << node_index_bits) | index;
+}
+
+pub fn dockNodeIndex(id: DockNodeId) u32 {
+    return id & node_index_mask;
+}
+
+pub fn dockNodeGeneration(id: DockNodeId) u8 {
+    return @intCast(id >> node_index_bits);
+}
+
 pub const invalid_node: NodeId = std.math.maxInt(NodeId);
 pub const invalid_window: WindowId = std.math.maxInt(WindowId);
 pub const invalid_dock_node: DockNodeId = std.math.maxInt(DockNodeId);
@@ -85,4 +148,14 @@ test "rect hit testing includes edges" {
     try std.testing.expect(rect.contains(.{ .x = 40, .y = 60 }));
     try std.testing.expect(!rect.contains(.{ .x = 41, .y = 60 }));
     try std.testing.expect(!rect.contains(.{ .x = 40, .y = 61 }));
+}
+
+test "texture handles reject a reused slot generation" {
+    const first = TextureHandle.fromParts(7, 2);
+    const reused = TextureHandle.fromParts(7, 3);
+
+    try std.testing.expect(first != reused);
+    try std.testing.expectEqual(@as(?u32, 7), first.index());
+    try std.testing.expectEqual(@as(u8, 2), first.generation());
+    try std.testing.expect(TextureHandle.none.index() == null);
 }

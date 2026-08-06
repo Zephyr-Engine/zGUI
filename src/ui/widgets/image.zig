@@ -1,11 +1,10 @@
-const std = @import("std");
 const types = @import("../core/types.zig");
 const style_mod = @import("../core/style.zig");
 const node_mod = @import("../core/node.zig");
 const app = @import("../core/ui_context.zig");
 
 pub const ImageOptions = struct {
-    texture_id: u32,
+    texture: types.TextureHandle,
     style: style_mod.Style,
     uv0: types.Vec2 = .{ .x = 0, .y = 0 },
     uv1: types.Vec2 = .{ .x = 1, .y = 1 },
@@ -18,7 +17,7 @@ pub fn image(ui: *app.Ui, parent: types.NodeId, options: ImageOptions) !types.No
     const node = ui.tree.get(id).?;
     node.style = options.style;
     node.image = .{
-        .texture_id = options.texture_id,
+        .texture = options.texture,
         .uv0 = options.uv0,
         .uv1 = options.uv1,
         .tint = options.tint,
@@ -30,11 +29,5 @@ pub fn image(ui: *app.Ui, parent: types.NodeId, options: ImageOptions) !types.No
 }
 
 pub fn setImage(ui: *app.Ui, id: types.NodeId, image_data: node_mod.Image) void {
-    if (ui.tree.get(id)) |node| {
-        if (node.image) |existing| {
-            if (std.meta.eql(existing, image_data)) return;
-        }
-        node.image = image_data;
-        node.dirty.paint = true;
-    }
+    ui.setImage(id, image_data) catch {};
 }

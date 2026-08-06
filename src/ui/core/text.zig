@@ -8,15 +8,6 @@ pub const TextMetrics = struct {
     line_height: f32 = 0,
 };
 
-pub const TextMeasurer = struct {
-    ptr: *anyopaque,
-    measureFn: *const fn (ptr: *anyopaque, text: []const u8, size: f32) TextMetrics,
-
-    pub fn measure(self: TextMeasurer, bytes: []const u8, size: f32) TextMetrics {
-        return self.measureFn(self.ptr, bytes, size);
-    }
-};
-
 pub const Utf8Iterator = struct {
     bytes: []const u8,
     index: usize = 0,

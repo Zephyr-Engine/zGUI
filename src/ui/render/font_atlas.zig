@@ -45,7 +45,7 @@ pub const FontAtlas = struct {
     pixels: []u8,
     width: u32,
     height: u32,
-    texture_id: u32 = 0,
+    texture: types.TextureHandle = .none,
     glyphs: std.AutoHashMap(GlyphKey, Glyph),
     advances: std.AutoHashMap(GlyphKey, f32),
     kern_pairs: std.AutoHashMap(KernKey, f32),
@@ -144,13 +144,6 @@ pub const FontAtlas = struct {
                 .y = line_height * @as(f32, @floatFromInt(line_count)),
             },
             .line_height = line_height,
-        };
-    }
-
-    pub fn textMeasurer(self: *FontAtlas) text_mod.TextMeasurer {
-        return .{
-            .ptr = self,
-            .measureFn = measureErased,
         };
     }
 
@@ -366,11 +359,6 @@ pub const FontAtlas = struct {
         const extent = self.ascent - self.descent;
         if (extent <= 0) return 0;
         return @as(f32, @floatFromInt(px_size)) / @as(f32, @floatFromInt(extent));
-    }
-
-    fn measureErased(ptr: *anyopaque, bytes: []const u8, size: f32) text_mod.TextMetrics {
-        const self: *FontAtlas = @ptrCast(@alignCast(ptr));
-        return self.measure(bytes, size);
     }
 };
 
