@@ -6,6 +6,7 @@ const input_mod = @import("input.zig");
 const paint_mod = @import("paint.zig");
 const theme_mod = @import("../theme.zig");
 const platform_events = @import("../platform/events.zig");
+const events_mod = @import("events.zig");
 const batcher_mod = @import("../render/batcher.zig");
 const draw_data_mod = @import("../render/draw_data.zig");
 const node_mod = @import("node.zig");
@@ -46,12 +47,19 @@ pub const Interaction = struct {
     clicked: bool = false,
 };
 
+const HandlerSlot = struct {
+    node: types.NodeId = types.invalid_node,
+    activate: ?events_mod.EventHandler = null,
+};
+
 pub const Ui = struct {
     allocator: std.mem.Allocator,
     tree: tree_mod.UiTree,
     paint_list: paint_mod.PaintList,
     batcher: batcher_mod.Batcher,
     input: input_mod.InputState = .{},
+    frame_events: std.ArrayList(events_mod.Event) = .empty,
+    handlers: std.ArrayList(HandlerSlot) = .empty,
     root: types.NodeId = types.invalid_node,
     window_size: types.Vec2 = .{},
     last_window_size: types.Vec2 = .{ .x = -1, .y = -1 },
@@ -89,6 +97,8 @@ pub const Ui = struct {
     }
 
     pub fn deinit(self: *Ui) void {
+        self.handlers.deinit(self.allocator);
+        self.frame_events.deinit(self.allocator);
         self.batcher.deinit();
         self.paint_list.deinit();
         self.tree.deinit();
@@ -101,10 +111,14 @@ pub const Ui = struct {
         self.requested_cursor = .arrow;
         self.pointer_capture = false;
         self.input.beginFrame();
+        self.frame_events.clearRetainingCapacity();
         for (frame.events) |event| {
-            input_mod.applyEvent(&self.input, event);
+            try self.routePlatformEvent(event);
         }
-        input_mod.routePointerState(&self.tree, self.root, &self.input);
+        // Tree geometry can change without a mouse-move event, so refresh hover
+        // once more against the retained bounds before application code runs.
+        input_mod.updateHovered(&self.tree, self.root, &self.input);
+        self.dispatchFrameEvents();
     }
 
     pub fn endFrame(self: *Ui) !void {
@@ -178,6 +192,22 @@ pub const Ui = struct {
         return self.root;
     }
 
+    pub fn createNode(self: *Ui, kind: node_mod.NodeKind) !types.NodeId {
+        return self.tree.createNode(kind);
+    }
+
+    /// Destroys an owned node subtree and releases every Ui-side reference to
+    /// it before its generational node slots become reusable.
+    pub fn destroySubtree(self: *Ui, id: types.NodeId) void {
+        if (id == self.root or self.tree.getConst(id) == null) return;
+        self.clearSubtreeState(id);
+        self.tree.destroyNodeUnmanaged(id);
+    }
+
+    pub fn nodeExists(self: *const Ui, id: types.NodeId) bool {
+        return self.tree.getConst(id) != null;
+    }
+
     pub fn setStyle(self: *Ui, id: types.NodeId, next_style: style_mod.Style) !void {
         const node = self.tree.get(id) orelse return error.InvalidNode;
         if (std.meta.eql(node.style, next_style)) return;
@@ -234,12 +264,43 @@ pub const Ui = struct {
             .hovered = self.input.hovered == id,
             .active = self.input.active == id,
             .focused = self.input.focused == id,
-            .clicked = self.input.clicked == id,
+            .clicked = self.activated(id),
         };
     }
 
+    /// Compatibility alias for `activated`. Activation is the semantic widget
+    /// action and can later be produced by keyboard or gamepad input as well.
     pub fn clicked(self: *const Ui, id: types.NodeId) bool {
-        return self.input.clicked == id;
+        return self.activated(id);
+    }
+
+    pub fn activated(self: *const Ui, id: types.NodeId) bool {
+        return self.activationCount(id) != 0;
+    }
+
+    pub fn activationCount(self: *const Ui, id: types.NodeId) usize {
+        var count: usize = 0;
+        for (self.frame_events.items) |event| switch (event) {
+            .activate => |activation| {
+                if (activation.target == id) count += 1;
+            },
+        };
+        return count;
+    }
+
+    pub fn frameEvents(self: *const Ui) []const events_mod.Event {
+        return self.frame_events.items;
+    }
+
+    pub fn setActivationHandler(self: *Ui, id: types.NodeId, handler: ?events_mod.EventHandler) !void {
+        if (self.tree.getConst(id) == null) return error.InvalidNode;
+        const index = types.nodeIndex(id);
+        if (index >= self.handlers.items.len) {
+            const old_len = self.handlers.items.len;
+            try self.handlers.resize(self.allocator, index + 1);
+            @memset(self.handlers.items[old_len..], .{});
+        }
+        self.handlers.items[index] = .{ .node = id, .activate = handler };
     }
 
     pub fn mousePosition(self: *const Ui) types.Vec2 {
@@ -284,8 +345,61 @@ pub const Ui = struct {
         };
     }
 
-    pub fn processPlatformEvent(self: *Ui, event: platform_events.PlatformEvent) void {
-        input_mod.applyEvent(&self.input, event);
+    pub fn processPlatformEvent(self: *Ui, event: platform_events.PlatformEvent) !void {
+        const first_event = self.frame_events.items.len;
+        try self.routePlatformEvent(event);
+        for (self.frame_events.items[first_event..]) |widget_event| self.dispatchEvent(widget_event);
+    }
+
+    fn routePlatformEvent(self: *Ui, event: platform_events.PlatformEvent) !void {
+        const target = input_mod.routeEvent(&self.tree, self.root, &self.input, event) orelse return;
+        try self.frame_events.append(self.allocator, .{ .activate = .{
+            .target = target,
+            .source = .{ .pointer = .{
+                .button = .left,
+                .position = self.input.mouse_pos,
+            } },
+        } });
+    }
+
+    fn dispatchFrameEvents(self: *Ui) void {
+        const event_count = self.frame_events.items.len;
+        for (0..event_count) |index| {
+            const event = self.frame_events.items[index];
+            self.dispatchEvent(event);
+        }
+    }
+
+    fn dispatchEvent(self: *Ui, event: events_mod.Event) void {
+        const target = event.target();
+        if (self.tree.getConst(target) == null) return;
+        const index = types.nodeIndex(target);
+        if (index >= self.handlers.items.len) return;
+        const slot = self.handlers.items[index];
+        if (slot.node != target) return;
+
+        switch (event) {
+            .activate => if (slot.activate) |handler| handler.call(event),
+        }
+    }
+
+    fn clearSubtreeState(self: *Ui, id: types.NodeId) void {
+        const node = self.tree.getConst(id) orelse return;
+        var child = node.first_child;
+        while (child != types.invalid_node) {
+            const next = if (self.tree.getConst(child)) |child_node| child_node.next_sibling else types.invalid_node;
+            self.clearSubtreeState(child);
+            child = next;
+        }
+
+        if (self.input.hovered == id) self.input.hovered = types.invalid_node;
+        if (self.input.active == id) self.input.active = types.invalid_node;
+        if (self.input.focused == id) self.input.focused = types.invalid_node;
+
+        const index = types.nodeIndex(id);
+        if (index < self.handlers.items.len and self.handlers.items[index].node == id) {
+            self.handlers.items[index] = .{};
+        }
     }
 
     fn updateStats(self: *Ui, dirty_layout_count: u32, dirty_paint_count: u32) void {
@@ -445,7 +559,7 @@ test "idle frames reuse draw data and rebuild on change" {
     var ui_state = try Ui.init(std.testing.allocator);
     defer ui_state.deinit();
 
-    const panel = try ui_state.tree.createNode(.panel);
+    const panel = try ui_state.createNode(.panel);
     ui_state.tree.get(panel).?.style = .{
         .width = .fill,
         .height = .{ .px = 40 },
@@ -481,8 +595,8 @@ test "scroll input updates both overflow axes and clamps to content" {
     var ui_state = try Ui.init(std.testing.allocator);
     defer ui_state.deinit();
 
-    const scroller = try ui_state.tree.createNode(.panel);
-    const child = try ui_state.tree.createNode(.panel);
+    const scroller = try ui_state.createNode(.panel);
+    const child = try ui_state.createNode(.panel);
     ui_state.tree.get(scroller).?.style = .{
         .width = .fill,
         .height = .fill,
@@ -557,7 +671,7 @@ test "paint-only style changes do not dirty layout" {
     var ui_state = try Ui.init(std.testing.allocator);
     defer ui_state.deinit();
 
-    const panel = try ui_state.tree.createNode(.panel);
+    const panel = try ui_state.createNode(.panel);
     try ui_state.tree.appendChild(ui_state.root, panel);
     try ui_state.beginFrame(.{ .window_size = .{ .x = 100, .y = 100 } });
     try ui_state.endFrame();
@@ -568,4 +682,124 @@ test "paint-only style changes do not dirty layout" {
     const counts = ui_state.tree.dirtyCounts();
     try std.testing.expectEqual(@as(u32, 0), counts.layout);
     try std.testing.expectEqual(@as(u32, 1), counts.paint);
+}
+
+fn createInteractionTestButton(ui_state: *Ui, bounds: types.Rect) !types.NodeId {
+    const id = try ui_state.createNode(.button);
+    ui_state.tree.get(id).?.bounds = bounds;
+    try ui_state.tree.appendChild(ui_state.root, id);
+    return id;
+}
+
+test "pointer events preserve ordering and every activation in a frame" {
+    var ui_state = try Ui.init(std.testing.allocator);
+    defer ui_state.deinit();
+    ui_state.tree.get(ui_state.root).?.bounds = .{ .w = 100, .h = 40 };
+
+    const first = try createInteractionTestButton(&ui_state, .{ .w = 50, .h = 40 });
+    const second = try createInteractionTestButton(&ui_state, .{ .x = 50, .w = 50, .h = 40 });
+
+    // Releasing over another node must not activate either node.
+    try ui_state.beginFrame(.{
+        .events = &.{
+            .{ .mouse_move = .{ .x = 20, .y = 20 } },
+            .{ .mouse_down = .left },
+            .{ .mouse_move = .{ .x = 70, .y = 20 } },
+            .{ .mouse_up = .left },
+        },
+        .window_size = .{ .x = 100, .y = 40 },
+    });
+    try std.testing.expectEqual(@as(usize, 0), ui_state.frameEvents().len);
+
+    try ui_state.beginFrame(.{
+        .events = &.{
+            .{ .mouse_move = .{ .x = 20, .y = 20 } },
+            .{ .mouse_down = .left },
+            .{ .mouse_up = .left },
+            .{ .mouse_down = .left },
+            .{ .mouse_up = .left },
+            .{ .mouse_move = .{ .x = 70, .y = 20 } },
+            .{ .mouse_down = .left },
+            .{ .mouse_up = .left },
+        },
+        .window_size = .{ .x = 100, .y = 40 },
+    });
+
+    try std.testing.expect(ui_state.clicked(first));
+    try std.testing.expect(ui_state.activated(second));
+    try std.testing.expectEqual(@as(usize, 2), ui_state.activationCount(first));
+    try std.testing.expectEqual(@as(usize, 1), ui_state.activationCount(second));
+    try std.testing.expectEqual(@as(usize, 3), ui_state.frameEvents().len);
+}
+
+test "activation callbacks are ordered and stale handlers do not fire" {
+    const Tracker = struct {
+        targets: [3]types.NodeId = undefined,
+        len: usize = 0,
+
+        fn record(self: *@This(), event: events_mod.Event) void {
+            self.targets[self.len] = event.target();
+            self.len += 1;
+        }
+    };
+
+    var ui_state = try Ui.init(std.testing.allocator);
+    defer ui_state.deinit();
+    ui_state.tree.get(ui_state.root).?.bounds = .{ .w = 100, .h = 40 };
+    const first = try createInteractionTestButton(&ui_state, .{ .w = 50, .h = 40 });
+    const second = try createInteractionTestButton(&ui_state, .{ .x = 50, .w = 50, .h = 40 });
+
+    var tracker: Tracker = .{};
+    const handler = events_mod.EventHandler.bind(&tracker, Tracker.record);
+    try ui_state.setActivationHandler(first, handler);
+    try ui_state.setActivationHandler(second, handler);
+
+    try ui_state.beginFrame(.{
+        .events = &.{
+            .{ .mouse_move = .{ .x = 20, .y = 20 } },
+            .{ .mouse_down = .left },
+            .{ .mouse_up = .left },
+            .{ .mouse_down = .left },
+            .{ .mouse_up = .left },
+            .{ .mouse_move = .{ .x = 70, .y = 20 } },
+            .{ .mouse_down = .left },
+            .{ .mouse_up = .left },
+        },
+        .window_size = .{ .x = 100, .y = 40 },
+    });
+    try std.testing.expectEqualSlices(types.NodeId, &.{ first, first, second }, tracker.targets[0..tracker.len]);
+
+    ui_state.destroySubtree(first);
+    const replacement = try createInteractionTestButton(&ui_state, .{ .w = 50, .h = 40 });
+    try std.testing.expectEqual(types.nodeIndex(first), types.nodeIndex(replacement));
+    try ui_state.beginFrame(.{
+        .events = &.{
+            .{ .mouse_move = .{ .x = 20, .y = 20 } },
+            .{ .mouse_down = .left },
+            .{ .mouse_up = .left },
+        },
+        .window_size = .{ .x = 100, .y = 40 },
+    });
+    try std.testing.expectEqual(@as(usize, 3), tracker.len);
+}
+
+test "destroySubtree clears interaction state for every descendant" {
+    var ui_state = try Ui.init(std.testing.allocator);
+    defer ui_state.deinit();
+
+    const parent = try ui_state.createNode(.panel);
+    try ui_state.tree.appendChild(ui_state.root, parent);
+    const child = try createInteractionTestButton(&ui_state, .{ .w = 40, .h = 40 });
+    try ui_state.tree.appendChild(parent, child);
+    ui_state.input.hovered = child;
+    ui_state.input.active = child;
+    ui_state.input.focused = child;
+
+    ui_state.destroySubtree(parent);
+
+    try std.testing.expect(!ui_state.nodeExists(parent));
+    try std.testing.expect(!ui_state.nodeExists(child));
+    try std.testing.expectEqual(types.invalid_node, ui_state.input.hovered);
+    try std.testing.expectEqual(types.invalid_node, ui_state.input.active);
+    try std.testing.expectEqual(types.invalid_node, ui_state.input.focused);
 }

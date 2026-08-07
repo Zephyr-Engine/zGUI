@@ -49,6 +49,61 @@ Runtime-specific event translation belongs in the consuming application. This
 keeps zGUI independent of engine packages and gives adapters concrete event,
 window, key, and mouse-button types.
 
+## Interaction
+
+Platform input is routed in order and converted into semantic frame events.
+Buttons emit `activate` after the primary pointer button is pressed and released
+over the same node. Applications can poll retained events:
+
+```zig
+if (state.activated(save_button)) save();
+```
+
+Or attach a callback without allocating a closure:
+
+```zig
+fn saveProject(controller: *Controller, _: zgui.Event) void {
+    controller.save();
+}
+
+try state.setActivationHandler(
+    save_button,
+    zgui.EventHandler.bind(controller, saveProject),
+);
+```
+
+`EventHandler` borrows its context. The context must remain at a stable address
+until the handler is replaced, cleared, or its node is destroyed. Callbacks run
+on the UI thread during `beginFrame`, after all platform events for that frame
+have been routed. `clicked` remains as an alias for `activated`.
+
+Buttons can bind the same handler during construction:
+
+```zig
+_ = try zgui.widgets.iconButton(&state, parent, .{
+    .texture = save_icon,
+    .style = button_style,
+    .on_activate = zgui.EventHandler.bind(controller, saveProject),
+});
+```
+
+## Ownership and lifecycle
+
+The application owns every subtree it creates below `Ui.rootNode()`. Widget
+constructors are transactional: a failed constructor removes any nodes it
+created. Remove a mounted component with `Ui.destroySubtree`; this recursively
+clears input state and callbacks before recycling its generational node slots.
+
+```zig
+const panel = try buildPanel(&state, state.rootNode());
+defer state.destroySubtree(panel);
+```
+
+`DockSpace.createWindow` borrows the supplied root node. `closeWindow` removes
+the docking/window state but deliberately leaves that root subtree alive for
+its owner to destroy or reuse. Window handles are generational, so a handle
+retained after close cannot address a later window that reuses the same slot.
+
 ## Status
 
 Early development. Not yet implemented: text-input widgets and keyboard focus routing, checkboxes/dropdowns, and multiple OS windows (floating windows live inside the main window's dock space).

@@ -13,7 +13,8 @@ pub const ImageOptions = struct {
 };
 
 pub fn image(ui: *app.Ui, parent: types.NodeId, options: ImageOptions) !types.NodeId {
-    const id = try ui.tree.createNode(.image);
+    const id = try ui.createNode(.image);
+    errdefer ui.destroySubtree(id);
     const node = ui.tree.get(id).?;
     node.style = options.style;
     node.image = .{

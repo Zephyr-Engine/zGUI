@@ -75,6 +75,8 @@ pub const Color = packed struct {
 /// high bits, so a stale id held after destroyNode never resolves to a node
 /// that later reused the same slot.
 pub const NodeId = u32;
+/// WindowId uses the same slot-plus-generation representation as NodeId.
+/// Closing and reopening a window slot never makes an old handle valid again.
 pub const WindowId = u32;
 /// DockNodeId uses the same slot-plus-generation encoding as NodeId. A handle
 /// to a collapsed dock node cannot resolve after its storage slot is reused.
@@ -123,6 +125,18 @@ pub fn nodeIndex(id: NodeId) u32 {
 }
 
 pub fn nodeGeneration(id: NodeId) u8 {
+    return @intCast(id >> node_index_bits);
+}
+
+pub fn makeWindowId(index: u32, generation: u8) WindowId {
+    return (@as(u32, generation) << node_index_bits) | index;
+}
+
+pub fn windowIndex(id: WindowId) u32 {
+    return id & node_index_mask;
+}
+
+pub fn windowGeneration(id: WindowId) u8 {
     return @intCast(id >> node_index_bits);
 }
 

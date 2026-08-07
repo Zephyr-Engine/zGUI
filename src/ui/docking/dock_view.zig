@@ -5,7 +5,8 @@ const app = @import("../core/ui_context.zig");
 const theme = @import("../theme.zig");
 
 pub fn createPanel(ui: *app.Ui, parent: types.NodeId) !types.NodeId {
-    const id = try ui.tree.createNode(.panel);
+    const id = try ui.createNode(.panel);
+    errdefer ui.destroySubtree(id);
     try ui.tree.appendChild(parent, id);
     var next = ui.nodeStyle(id).?;
     next.direction = .absolute;

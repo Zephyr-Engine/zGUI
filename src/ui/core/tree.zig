@@ -48,12 +48,14 @@ pub const UiTree = struct {
         return id;
     }
 
-    pub fn destroyNode(self: *UiTree, id: types.NodeId) void {
+    /// Removes node storage without clearing Ui-owned interaction or handler
+    /// state. Application and widget code must use Ui.destroySubtree instead.
+    pub fn destroyNodeUnmanaged(self: *UiTree, id: types.NodeId) void {
         var node = self.get(id) orelse return;
 
         while (node.first_child != types.invalid_node) {
             const child = node.first_child;
-            self.destroyNode(child);
+            self.destroyNodeUnmanaged(child);
             node = self.get(id) orelse return;
         }
 
@@ -229,7 +231,7 @@ test "node slots are reused with fresh generations" {
     defer tree.deinit();
 
     const a = try tree.createNode(.panel);
-    tree.destroyNode(a);
+    tree.destroyNodeUnmanaged(a);
     const b = try tree.createNode(.label);
     try std.testing.expectEqual(types.nodeIndex(a), types.nodeIndex(b));
     try std.testing.expect(a != b);
@@ -241,7 +243,7 @@ test "stale node ids do not resolve after slot reuse" {
     defer tree.deinit();
 
     const a = try tree.createNode(.panel);
-    tree.destroyNode(a);
+    tree.destroyNodeUnmanaged(a);
     const b = try tree.createNode(.button);
     try std.testing.expect(tree.get(a) == null);
     try std.testing.expect(tree.getConst(a) == null);

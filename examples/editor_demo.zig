@@ -186,6 +186,7 @@ pub fn main(init: std.process.Init) !void {
     var demo = try DemoState.init(init.gpa, &state);
     defer demo.deinit();
     var click_count: u32 = 0;
+    try state.setActivationHandler(demo.nodes.click_button, ui.EventHandler.bind(&click_count, incrementClickCount));
 
     while (!platform.shouldClose()) {
         const platform_events = platform.pollEvents();
@@ -204,10 +205,6 @@ pub fn main(init: std.process.Init) !void {
             demo.layoutDock(size);
         }
         demo.applyPanelStyles(&state);
-
-        if (state.clicked(demo.nodes.click_button)) {
-            click_count += 1;
-        }
 
         var click_buf: [64]u8 = undefined;
         try state.setText(demo.nodes.click_label, try std.fmt.bufPrint(&click_buf, "Clicks {d}", .{click_count}));
@@ -236,6 +233,10 @@ pub fn main(init: std.process.Init) !void {
         try gl.endFrame();
         platform.swapBuffers();
     }
+}
+
+fn incrementClickCount(count: *u32, _: ui.Event) void {
+    count.* += 1;
 }
 
 fn framebufferScale(window_size: ui.Vec2, framebuffer_size: ui.Vec2) f32 {

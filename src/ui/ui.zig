@@ -7,7 +7,7 @@ const app = @import("core/ui_context.zig");
 const text = @import("core/text.zig");
 pub const theme = @import("theme.zig");
 
-const platform_events = @import("platform/events.zig");
+const events = @import("core/events.zig");
 
 const draw_data = @import("render/draw_data.zig");
 const batcher = @import("render/batcher.zig");
@@ -16,6 +16,7 @@ const opengl_renderer = @import("render/opengl_renderer.zig");
 
 const dock_manager = @import("docking/dock_manager.zig");
 const dock_space = @import("docking/dock_space.zig");
+const window = @import("windowing/window.zig");
 
 pub const widgets = @import("widgets/widgets.zig");
 
@@ -27,6 +28,7 @@ pub const WindowId = types.WindowId;
 pub const DockNodeId = types.DockNodeId;
 pub const TextureHandle = types.TextureHandle;
 pub const invalid_node = types.invalid_node;
+pub const invalid_window = types.invalid_window;
 
 pub const Size = style.Size;
 pub const LayoutDirection = style.LayoutDirection;
@@ -47,9 +49,13 @@ pub const UiStats = app.UiStats;
 pub const InputCapture = app.InputCapture;
 pub const Interaction = app.Interaction;
 
-pub const PlatformEvent = platform_events.PlatformEvent;
-pub const MouseButton = platform_events.MouseButton;
-pub const Key = platform_events.Key;
+pub const PlatformEvent = events.PlatformEvent;
+pub const MouseButton = events.MouseButton;
+pub const Key = events.Key;
+pub const Event = events.Event;
+pub const EventHandler = events.EventHandler;
+pub const Activation = events.Activation;
+pub const ActivationSource = events.ActivationSource;
 
 pub const TextMetrics = text.TextMetrics;
 pub const FontAtlas = font_atlas.FontAtlas;
@@ -59,4 +65,5 @@ pub const DockSpace = dock_space.DockSpace;
 pub const DockSpaceOptions = dock_space.DockSpaceOptions;
 pub const DockSpaceResult = dock_space.DockSpaceResult;
 pub const DockWindowId = dock_space.DockWindowId;
-pub const CursorKind = platform_events.CursorKind;
+pub const WindowFlags = window.WindowFlags;
+pub const CursorKind = events.CursorKind;

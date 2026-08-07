@@ -62,6 +62,7 @@ const OverlayNodes = struct {
 };
 
 const WindowState = struct {
+    window: DockWindowId = types.invalid_window,
     content_rect: types.Rect = .{},
     content_visible: bool = false,
     tab: types.NodeId = types.invalid_node,
@@ -117,9 +118,37 @@ pub const DockSpace = struct {
         flags: window_mod.WindowFlags,
     ) !DockWindowId {
         const id = try self.windows.createWindow(title, .{}, root_node, flags);
+        errdefer self.windows.closeWindow(id);
         self.windows.get(id).?.min_size = min_size;
-        try self.ensureWindowCapacity(id + 1);
+        const index = types.windowIndex(id);
+        try self.ensureWindowCapacity(index + 1);
+        const tab = self.window_state.items[index].tab;
+        const tab_label = self.window_state.items[index].tab_label;
+        self.window_state.items[index] = .{ .window = id, .tab = tab, .tab_label = tab_label };
         return id;
+    }
+
+    /// Removes a window from docking while leaving its root subtree under the
+    /// ownership of the caller that supplied it to createWindow.
+    pub fn closeWindow(self: *DockSpace, window: DockWindowId) !void {
+        if (self.windows.get(window) == null) return error.InvalidWindow;
+        try self.dock.undockWindow(window);
+        if (self.drag) |drag| {
+            if (drag.window == window) self.drag = null;
+        }
+        self.windows.closeWindow(window);
+
+        const index = types.windowIndex(window);
+        if (index < self.window_state.items.len and self.window_state.items[index].window == window) {
+            self.window_state.items[index].window = types.invalid_window;
+            self.window_state.items[index].content_rect = .{};
+            self.window_state.items[index].content_visible = false;
+            self.window_state.items[index].last_sync = 0;
+        }
+    }
+
+    pub fn isWindowOpen(self: *const DockSpace, window: DockWindowId) bool {
+        return self.windows.getConst(window) != null;
     }
 
     pub fn splitNode(
@@ -157,9 +186,11 @@ pub const DockSpace = struct {
     }
 
     pub fn windowContentRect(self: *const DockSpace, window: DockWindowId) ?types.Rect {
-        if (window == types.invalid_window or window >= self.window_state.items.len) return null;
-        const state = self.window_state.items[window];
-        if (state.last_sync != self.sync_stamp or !state.content_visible) return null;
+        if (self.windows.getConst(window) == null) return null;
+        const index = types.windowIndex(window);
+        if (index >= self.window_state.items.len) return null;
+        const state = self.window_state.items[index];
+        if (state.window != window or state.last_sync != self.sync_stamp or !state.content_visible) return null;
         return state.content_rect;
     }
 
@@ -334,15 +365,16 @@ pub const DockSpace = struct {
         try self.collectSplitHandles(self.dock.root);
 
         self.float_scratch.clearRetainingCapacity();
-        for (self.windows.windows.items, 0..) |*window, i| {
-            const window_id: DockWindowId = @intCast(i);
+        for (self.windows.windows.items) |*window| {
+            const window_id = window.id;
             if (!window.open or self.dock.leafForWindow(window_id) != null) continue;
-            if (window_id >= self.floating_nodes.items.len) continue;
+            const window_index = types.windowIndex(window_id);
+            if (window_index >= self.floating_nodes.items.len) continue;
             try self.float_scratch.append(self.allocator, window_id);
         }
         std.mem.sort(DockWindowId, self.float_scratch.items, @as(*const window_manager_mod.WindowManager, &self.windows), floatZLessThan);
         for (self.float_scratch.items) |window_id| {
-            try self.order_scratch.append(self.allocator, self.floating_nodes.items[window_id].host);
+            try self.order_scratch.append(self.allocator, self.floating_nodes.items[types.windowIndex(window_id)].host);
         }
 
         try self.order_scratch.append(self.allocator, self.overlays.drop_preview);
@@ -383,11 +415,12 @@ pub const DockSpace = struct {
                 self.ensureWindowTab(ui, nodes.tab_bar, window_id) catch {};
                 const tab_rect = tabRect(leaf.rect, tab_index, leaf.tabs.items.len, options.tab_height);
                 const is_active = active != null and active.? == window_id;
-                if (window_id < self.window_state.items.len) {
-                    self.window_state.items[window_id].last_sync = self.sync_stamp;
-                    self.window_state.items[window_id].content_visible = is_active;
-                    const tab = self.window_state.items[window_id].tab;
-                    const label = self.window_state.items[window_id].tab_label;
+                const window_index = types.windowIndex(window_id);
+                if (window_index < self.window_state.items.len) {
+                    self.window_state.items[window_index].last_sync = self.sync_stamp;
+                    self.window_state.items[window_index].content_visible = is_active;
+                    const tab = self.window_state.items[window_index].tab;
+                    const label = self.window_state.items[window_index].tab_label;
                     const is_hovered = tab_rect.contains(ui.input.mouse_pos);
                     const is_dragged = if (self.drag) |drag| drag.window == window_id else false;
                     ensureRootParent(ui, tab, nodes.tab_bar);
@@ -406,7 +439,7 @@ pub const DockSpace = struct {
                 ensureRootParent(ui, window.root_node, if (active != null and active.? == window_id) nodes.content else types.invalid_node);
                 if (active != null and active.? == window_id) {
                     setContentRoot(ui, window.root_node);
-                    if (window_id < self.window_state.items.len) self.window_state.items[window_id].content_rect = content_rect;
+                    if (window_index < self.window_state.items.len) self.window_state.items[window_index].content_rect = content_rect;
                 }
             }
         }
@@ -430,12 +463,13 @@ pub const DockSpace = struct {
     fn syncFloatingNodes(self: *DockSpace, ui: *app.Ui, parent: types.NodeId, options: DockSpaceOptions) !void {
         _ = options;
         const parent_origin = nodeOrigin(ui, parent);
-        for (self.windows.windows.items, 0..) |*window, i| {
-            const window_id: DockWindowId = @intCast(i);
+        for (self.windows.windows.items) |*window| {
+            const window_id = window.id;
             if (!window.open or self.dock.leafForWindow(window_id) != null) continue;
-            try self.ensureFloatingCapacity(ui, parent, window_id + 1);
-            self.floating_nodes.items[window_id].last_sync = self.sync_stamp;
-            const nodes = self.floating_nodes.items[window_id];
+            const window_index = types.windowIndex(window_id);
+            try self.ensureFloatingCapacity(ui, parent, window_index + 1);
+            self.floating_nodes.items[window_index].last_sync = self.sync_stamp;
+            const nodes = self.floating_nodes.items[window_index];
             if (window.rect.w <= 0 or window.rect.h <= 0) {
                 window.rect.w = @max(260, window.min_size.x);
                 window.rect.h = @max(190, window.min_size.y);
@@ -451,8 +485,8 @@ pub const DockSpace = struct {
             setPanel(ui, nodes.content, content_rect, .{ .x = window.rect.x, .y = window.rect.y }, .transparent, false);
             ensureRootParent(ui, window.root_node, nodes.content);
             setContentRoot(ui, window.root_node);
-            if (window_id < self.window_state.items.len) self.window_state.items[window_id].content_rect = content_rect;
-            if (window_id < self.window_state.items.len) self.window_state.items[window_id].content_visible = true;
+            if (window_index < self.window_state.items.len) self.window_state.items[window_index].content_rect = content_rect;
+            if (window_index < self.window_state.items.len) self.window_state.items[window_index].content_visible = true;
         }
     }
 
@@ -473,8 +507,8 @@ pub const DockSpace = struct {
     }
 
     fn floatingTitleAt(self: *const DockSpace, mouse_pos: types.Vec2) ?DockWindowId {
-        for (self.windows.windows.items, 0..) |window, i| {
-            const window_id: DockWindowId = @intCast(i);
+        for (self.windows.windows.items) |window| {
+            const window_id = window.id;
             if (!window.open or self.dock.leafForWindow(window_id) != null) continue;
             const title_rect: types.Rect = .{ .x = window.rect.x, .y = window.rect.y, .w = window.rect.w, .h = floating_title_height };
             if (title_rect.contains(mouse_pos)) return window_id;
@@ -504,23 +538,22 @@ pub const DockSpace = struct {
 
     fn ensureNodeCapacity(self: *DockSpace, ui: *app.Ui, parent: types.NodeId) !void {
         while (self.leaf_nodes.items.len < self.dock.nodes.items.len) {
-            const host = try createPanel(ui, parent);
-            const tab_bar = try createPanel(ui, host);
-            const content = try createPanel(ui, host);
-            try self.leaf_nodes.append(self.allocator, .{ .host = host, .tab_bar = tab_bar, .content = content });
+            const nodes = try createLeafNodes(ui, parent);
+            errdefer ui.destroySubtree(nodes.host);
+            try self.leaf_nodes.append(self.allocator, nodes);
         }
         while (self.split_nodes.items.len < self.dock.nodes.items.len) {
             const handle = try createPanel(ui, parent);
+            errdefer ui.destroySubtree(handle);
             try self.split_nodes.append(self.allocator, .{ .handle = handle });
         }
     }
 
     fn ensureFloatingCapacity(self: *DockSpace, ui: *app.Ui, parent: types.NodeId, count: usize) !void {
         while (self.floating_nodes.items.len < count) {
-            const host = try createPanel(ui, parent);
-            const title = try createPanel(ui, host);
-            const content = try createPanel(ui, host);
-            try self.floating_nodes.append(self.allocator, .{ .host = host, .title = title, .content = content });
+            const nodes = try createFloatingNodes(ui, parent);
+            errdefer ui.destroySubtree(nodes.host);
+            try self.floating_nodes.append(self.allocator, nodes);
         }
     }
 
@@ -531,13 +564,23 @@ pub const DockSpace = struct {
     }
 
     fn ensureWindowTab(self: *DockSpace, ui: *app.Ui, parent: types.NodeId, window: DockWindowId) !void {
-        try self.ensureWindowCapacity(window + 1);
-        if (self.window_state.items[window].tab != types.invalid_node) return;
+        const index = types.windowIndex(window);
+        try self.ensureWindowCapacity(index + 1);
+        const state = &self.window_state.items[index];
+        if (state.window != window) {
+            state.window = window;
+            state.content_rect = .{};
+            state.content_visible = false;
+            state.last_sync = 0;
+        }
+        if (state.tab != types.invalid_node) return;
         const tab = try createPanel(ui, parent);
-        const label = try ui.tree.createNode(.label);
+        errdefer ui.destroySubtree(tab);
+        const label = try ui.createNode(.label);
+        errdefer ui.destroySubtree(label);
         try ui.tree.appendChild(tab, label);
-        self.window_state.items[window].tab = tab;
-        self.window_state.items[window].tab_label = label;
+        state.tab = tab;
+        state.tab_label = label;
     }
 
     fn ensureOverlayNodes(self: *DockSpace, ui: *app.Ui, parent: types.NodeId) !void {
@@ -545,9 +588,13 @@ pub const DockSpace = struct {
             self.overlays.drop_preview = try createPanel(ui, parent);
         }
         if (self.overlays.drag_ghost == types.invalid_node) {
-            self.overlays.drag_ghost = try createPanel(ui, parent);
-            self.overlays.drag_label = try ui.tree.createNode(.label);
-            try ui.tree.appendChild(self.overlays.drag_ghost, self.overlays.drag_label);
+            const ghost = try createPanel(ui, parent);
+            errdefer ui.destroySubtree(ghost);
+            const label = try ui.createNode(.label);
+            errdefer ui.destroySubtree(label);
+            try ui.tree.appendChild(ghost, label);
+            self.overlays.drag_ghost = ghost;
+            self.overlays.drag_label = label;
         }
     }
 
@@ -594,6 +641,26 @@ pub fn dockSpace(ui: *app.Ui, parent: types.NodeId, dock_space: *DockSpace, opti
 
 fn createPanel(ui: *app.Ui, parent: types.NodeId) !types.NodeId {
     return dock_view.createPanel(ui, parent);
+}
+
+fn createLeafNodes(ui: *app.Ui, parent: types.NodeId) !LeafNodes {
+    const host = try createPanel(ui, parent);
+    errdefer ui.destroySubtree(host);
+    return .{
+        .host = host,
+        .tab_bar = try createPanel(ui, host),
+        .content = try createPanel(ui, host),
+    };
+}
+
+fn createFloatingNodes(ui: *app.Ui, parent: types.NodeId) !FloatingNodes {
+    const host = try createPanel(ui, parent);
+    errdefer ui.destroySubtree(host);
+    return .{
+        .host = host,
+        .title = try createPanel(ui, host),
+        .content = try createPanel(ui, host),
+    };
 }
 
 fn setPanel(ui: *app.Ui, id: types.NodeId, rect: types.Rect, origin: types.Vec2, background: theme_mod.ColorRole, interactive: bool) void {
@@ -911,8 +978,8 @@ test "floating windows paint in z order after bring to front" {
     try ui_state.beginFrame(.{ .events = &.{}, .window_size = .{ .x = 400, .y = 300 } });
     _ = try space.run(&ui_state, ui_state.root, opts);
 
-    const a_host = space.floating_nodes.items[a].host;
-    const b_host = space.floating_nodes.items[b].host;
+    const a_host = space.floating_nodes.items[types.windowIndex(a)].host;
+    const b_host = space.floating_nodes.items[types.windowIndex(b)].host;
     var a_pos = siblingPosition(&ui_state, ui_state.root, a_host).?;
     var b_pos = siblingPosition(&ui_state, ui_state.root, b_host).?;
     try std.testing.expect(a_pos < b_pos);
@@ -945,12 +1012,12 @@ test "docking a floating window hides its floating chrome" {
     const opts = DockSpaceOptions{ .rect = .{ .x = 0, .y = 0, .w = 400, .h = 300 } };
     try ui_state.beginFrame(.{ .events = &.{}, .window_size = .{ .x = 400, .y = 300 } });
     _ = try space.run(&ui_state, ui_state.root, opts);
-    try std.testing.expect(ui_state.tree.get(space.floating_nodes.items[b].host).?.flags.visible);
+    try std.testing.expect(ui_state.tree.get(space.floating_nodes.items[types.windowIndex(b)].host).?.flags.visible);
 
     try space.dock.dockWindow(b, space.dock.root, .center_tab);
     try ui_state.beginFrame(.{ .events = &.{}, .window_size = .{ .x = 400, .y = 300 } });
     _ = try space.run(&ui_state, ui_state.root, opts);
-    try std.testing.expect(!ui_state.tree.get(space.floating_nodes.items[b].host).?.flags.visible);
+    try std.testing.expect(!ui_state.tree.get(space.floating_nodes.items[types.windowIndex(b)].host).?.flags.visible);
 }
 
 test "dock manager moving last tab cleans empty source leaf" {
@@ -965,4 +1032,27 @@ test "dock manager moving last tab cleans empty source leaf" {
     try std.testing.expect(dock.leafForWindow(1) != null);
     try std.testing.expect(dock.leafForWindow(2) != null);
     try std.testing.expectEqual(dock.leafForWindow(2).?, dock.leafForWindow(1).?);
+}
+
+test "closing a dock window preserves caller content and rejects its stale handle" {
+    var ui_state = try app.Ui.init(std.testing.allocator);
+    defer ui_state.deinit();
+
+    var space = try DockSpace.init(std.testing.allocator);
+    defer space.deinit();
+    const first_root = try createPanel(&ui_state, ui_state.root);
+    const first = try space.createWindow("First", first_root, .{ .x = 80, .y = 80 }, .{});
+    try space.moveWindowToLeaf(first, space.rootLeaf());
+
+    try space.closeWindow(first);
+    try std.testing.expect(!space.isWindowOpen(first));
+    try std.testing.expect(space.dock.leafForWindow(first) == null);
+    try std.testing.expect(ui_state.nodeExists(first_root));
+
+    const second_root = try createPanel(&ui_state, ui_state.root);
+    const second = try space.createWindow("Second", second_root, .{ .x = 80, .y = 80 }, .{});
+    try std.testing.expectEqual(types.windowIndex(first), types.windowIndex(second));
+    try std.testing.expect(first != second);
+    try std.testing.expectError(error.InvalidWindow, space.closeWindow(first));
+    try std.testing.expect(space.isWindowOpen(second));
 }

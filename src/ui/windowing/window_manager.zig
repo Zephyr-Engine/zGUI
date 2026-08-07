@@ -5,7 +5,7 @@ const window_mod = @import("window.zig");
 pub const WindowManager = struct {
     allocator: std.mem.Allocator,
     windows: std.ArrayList(window_mod.Window) = .empty,
-    free_list: std.ArrayList(types.WindowId) = .empty,
+    free_list: std.ArrayList(u32) = .empty,
     next_z: u32 = 1,
     focused: types.WindowId = types.invalid_window,
 
@@ -31,14 +31,21 @@ pub const WindowManager = struct {
     ) !types.WindowId {
         const owned_title = try self.allocator.dupe(u8, title);
         errdefer self.allocator.free(owned_title);
+        try self.free_list.ensureTotalCapacity(self.allocator, self.windows.items.len + 1);
 
-        const id = self.free_list.pop() orelse blk: {
-            const next: types.WindowId = @intCast(self.windows.items.len);
+        const reused_index = self.free_list.pop();
+        const index = reused_index orelse blk: {
+            const next: u32 = @intCast(self.windows.items.len);
             try self.windows.append(self.allocator, undefined);
             break :blk next;
         };
+        const generation: u8 = if (reused_index != null)
+            nextGeneration(types.windowGeneration(self.windows.items[index].id))
+        else
+            1;
+        const id = types.makeWindowId(index, generation);
 
-        self.windows.items[id] = .{
+        self.windows.items[index] = .{
             .id = id,
             .title = owned_title,
             .rect = rect,
@@ -55,7 +62,7 @@ pub const WindowManager = struct {
         self.allocator.free(window.title);
         window.title = &.{};
         window.open = false;
-        self.free_list.append(self.allocator, id) catch {};
+        self.free_list.appendAssumeCapacity(types.windowIndex(id));
         if (self.focused == id) self.focused = types.invalid_window;
     }
 
@@ -66,17 +73,27 @@ pub const WindowManager = struct {
     }
 
     pub fn get(self: *WindowManager, id: types.WindowId) ?*window_mod.Window {
-        if (id == types.invalid_window or id >= self.windows.items.len) return null;
-        const window = &self.windows.items[id];
-        if (!window.open) return null;
+        if (id == types.invalid_window) return null;
+        const index = types.windowIndex(id);
+        if (index >= self.windows.items.len) return null;
+        const window = &self.windows.items[index];
+        if (!window.open or window.id != id) return null;
         return window;
     }
 
     pub fn getConst(self: *const WindowManager, id: types.WindowId) ?*const window_mod.Window {
-        if (id == types.invalid_window or id >= self.windows.items.len) return null;
-        const window = &self.windows.items[id];
-        if (!window.open) return null;
+        if (id == types.invalid_window) return null;
+        const index = types.windowIndex(id);
+        if (index >= self.windows.items.len) return null;
+        const window = &self.windows.items[index];
+        if (!window.open or window.id != id) return null;
         return window;
+    }
+
+    pub fn idForSlot(self: *const WindowManager, index: usize) ?types.WindowId {
+        if (index >= self.windows.items.len) return null;
+        const window = &self.windows.items[index];
+        return if (window.open) window.id else null;
     }
 
     fn nextZ(self: *WindowManager) u32 {
@@ -86,3 +103,21 @@ pub const WindowManager = struct {
         return z;
     }
 };
+
+fn nextGeneration(current: u8) u8 {
+    return if (current == std.math.maxInt(u8)) 1 else current + 1;
+}
+
+test "closed window slots are reused with a fresh generation" {
+    var windows = WindowManager.init(std.testing.allocator);
+    defer windows.deinit();
+
+    const first = try windows.createWindow("First", .{}, types.invalid_node, .{});
+    windows.closeWindow(first);
+    const second = try windows.createWindow("Second", .{}, types.invalid_node, .{});
+
+    try std.testing.expectEqual(types.windowIndex(first), types.windowIndex(second));
+    try std.testing.expect(first != second);
+    try std.testing.expect(windows.get(first) == null);
+    try std.testing.expect(windows.get(second) != null);
+}

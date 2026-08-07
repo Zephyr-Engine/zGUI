@@ -5,6 +5,7 @@ const app = @import("../core/ui_context.zig");
 const panel_mod = @import("panel.zig");
 const label_mod = @import("label.zig");
 const button_mod = @import("button.zig");
+const events = @import("../core/events.zig");
 
 pub const CardOptions = struct {
     width: style_mod.Size = .fill,
@@ -44,6 +45,7 @@ pub const ButtonOptions = struct {
     border_width: f32 = 1,
     radius: theme_mod.RadiusRole = .control,
     font_size: f32 = 12,
+    on_activate: ?events.EventHandler = null,
 };
 
 const ButtonRoles = struct {
@@ -130,6 +132,7 @@ pub fn pill(ui: *app.Ui, parent: types.NodeId, bytes: []const u8, options: PillO
         .border_width = 1,
         .radius = .pill,
     });
+    errdefer ui.destroySubtree(container);
     _ = try text(ui, container, bytes, .{
         .width = .fill,
         .height = .fill,
@@ -141,7 +144,7 @@ pub fn pill(ui: *app.Ui, parent: types.NodeId, bytes: []const u8, options: PillO
 
 pub fn themedButton(ui: *app.Ui, parent: types.NodeId, bytes: []const u8, options: ButtonOptions) !types.NodeId {
     const roles = buttonRoles(options);
-    return button_mod.button(ui, parent, bytes, ui.theme.style(.{
+    const id = try button_mod.button(ui, parent, bytes, ui.theme.style(.{
         .width = options.width,
         .height = options.height,
         .padding = options.padding,
@@ -152,6 +155,9 @@ pub fn themedButton(ui: *app.Ui, parent: types.NodeId, bytes: []const u8, option
         .radius = options.radius,
         .font_size = options.font_size,
     }));
+    errdefer ui.destroySubtree(id);
+    if (options.on_activate) |handler| try ui.setActivationHandler(id, handler);
+    return id;
 }
 
 pub fn toolbarButton(ui: *app.Ui, parent: types.NodeId, bytes: []const u8, width: f32, variant: ButtonVariant) !types.NodeId {

@@ -15,14 +15,12 @@ pub const InputState = struct {
     hovered: types.NodeId = types.invalid_node,
     active: types.NodeId = types.invalid_node,
     focused: types.NodeId = types.invalid_node,
-    clicked: types.NodeId = types.invalid_node,
 
     pub fn beginFrame(self: *InputState) void {
         self.prev_mouse_pos = self.mouse_pos;
         self.mouse_pressed = .{ false, false, false };
         self.mouse_released = .{ false, false, false };
         self.scroll_delta = .{};
-        self.clicked = types.invalid_node;
     }
 };
 
@@ -47,6 +45,26 @@ pub fn applyEvent(input: *InputState, event: events.PlatformEvent) void {
     }
 }
 
+/// Applies and routes one platform event before the next event is observed.
+/// Returning a node signals a semantic primary-button activation.
+pub fn routeEvent(tree: *tree_mod.UiTree, root: types.NodeId, input: *InputState, event: events.PlatformEvent) ?types.NodeId {
+    applyEvent(input, event);
+
+    switch (event) {
+        .mouse_move => updateHovered(tree, root, input),
+        .mouse_down => |button| {
+            updateHovered(tree, root, input);
+            if (button == .left) pressPrimary(tree, input);
+        },
+        .mouse_up => |button| {
+            updateHovered(tree, root, input);
+            if (button == .left) return releasePrimary(tree, input);
+        },
+        else => {},
+    }
+    return null;
+}
+
 pub fn hitTest(tree: *const tree_mod.UiTree, root: types.NodeId, pos: types.Vec2) ?types.NodeId {
     const root_node = tree.getConst(root) orelse return null;
     if (!root_node.flags.visible or !root_node.bounds.contains(pos)) return null;
@@ -62,7 +80,7 @@ pub fn hitTest(tree: *const tree_mod.UiTree, root: types.NodeId, pos: types.Vec2
     return null;
 }
 
-pub fn routePointerState(tree: *tree_mod.UiTree, root: types.NodeId, input: *InputState) void {
+pub fn updateHovered(tree: *tree_mod.UiTree, root: types.NodeId, input: *InputState) void {
     const next_hovered = hitTest(tree, root, input.mouse_pos) orelse types.invalid_node;
     if (next_hovered != input.hovered) {
         if (tree.get(input.hovered)) |old| {
@@ -75,31 +93,34 @@ pub fn routePointerState(tree: *tree_mod.UiTree, root: types.NodeId, input: *Inp
         dirty.markPaintDirty(tree, next_hovered);
         input.hovered = next_hovered;
     }
-
-    if (input.mouse_pressed[0]) {
-        input.active = input.hovered;
-        input.focused = input.hovered;
-        if (tree.get(input.active)) |node| {
-            node.flags.pressed = true;
-            node.flags.focused = true;
-        }
-        dirty.markPaintDirty(tree, input.active);
-    }
-
-    if (input.mouse_released[0]) {
-        if (input.active != types.invalid_node and input.hovered == input.active) {
-            input.clicked = input.active;
-        }
-        if (tree.get(input.active)) |node| {
-            node.flags.pressed = false;
-        }
-        dirty.markPaintDirty(tree, input.active);
-        input.active = types.invalid_node;
-    }
 }
 
-pub fn buttonClicked(input_state: InputState, id: types.NodeId) bool {
-    return input_state.clicked == id;
+fn pressPrimary(tree: *tree_mod.UiTree, input: *InputState) void {
+    input.active = input.hovered;
+
+    if (input.focused != input.hovered) {
+        if (tree.get(input.focused)) |old| old.flags.focused = false;
+        dirty.markPaintDirty(tree, input.focused);
+        input.focused = input.hovered;
+    }
+
+    if (tree.get(input.active)) |node| {
+        node.flags.pressed = true;
+        node.flags.focused = true;
+    }
+    dirty.markPaintDirty(tree, input.active);
+}
+
+fn releasePrimary(tree: *tree_mod.UiTree, input: *InputState) ?types.NodeId {
+    const active = input.active;
+    const activated = if (active != types.invalid_node and input.hovered == active) active else types.invalid_node;
+
+    if (tree.get(active)) |node| node.flags.pressed = false;
+    dirty.markPaintDirty(tree, active);
+    input.active = types.invalid_node;
+
+    if (activated == types.invalid_node) return null;
+    return activated;
 }
 
 pub fn mouseDelta(input_state: InputState) types.Vec2 {
