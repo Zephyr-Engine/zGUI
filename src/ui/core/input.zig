@@ -123,13 +123,6 @@ fn releasePrimary(tree: *tree_mod.UiTree, input: *InputState) ?types.NodeId {
     return activated;
 }
 
-pub fn mouseDelta(input_state: InputState) types.Vec2 {
-    return .{
-        .x = input_state.mouse_pos.x - input_state.prev_mouse_pos.x,
-        .y = input_state.mouse_pos.y - input_state.prev_mouse_pos.y,
-    };
-}
-
 pub fn mouseDown(input_state: InputState, button: events.MouseButton) bool {
     return input_state.mouse_down[buttonIndex(button)];
 }
@@ -140,14 +133,6 @@ pub fn mousePressed(input_state: InputState, button: events.MouseButton) bool {
 
 pub fn mouseReleased(input_state: InputState, button: events.MouseButton) bool {
     return input_state.mouse_released[buttonIndex(button)];
-}
-
-pub fn nodeHovered(input_state: InputState, id: types.NodeId) bool {
-    return input_state.hovered == id;
-}
-
-pub fn nodeActive(input_state: InputState, id: types.NodeId) bool {
-    return input_state.active == id;
 }
 
 fn buttonIndex(button: events.MouseButton) usize {

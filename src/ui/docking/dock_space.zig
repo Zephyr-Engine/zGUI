@@ -25,11 +25,6 @@ pub const DockSpaceResult = struct {
     changed: bool = false,
     cursor: events.CursorKind = .arrow,
     active_window: ?DockWindowId = null,
-
-    pub fn contentRect(self: DockSpaceResult, dock_space: *const DockSpace, window: DockWindowId) ?types.Rect {
-        _ = self;
-        return dock_space.windowContentRect(window);
-    }
 };
 
 const tab_nominal_width: f32 = 116;
@@ -206,10 +201,10 @@ pub const DockSpace = struct {
         try self.ensureOverlayNodes(ui, parent);
 
         self.syncDockNode(ui, parent, self.dock.root, options);
-        try self.syncFloatingNodes(ui, parent, options);
+        try self.syncFloatingNodes(ui, parent);
         self.hideStaleNodes(ui);
         try self.applyPaintOrder(ui, parent);
-        self.syncDragFeedback(ui, parent, options);
+        self.syncDragFeedback(ui, parent);
 
         if (self.dock.hitTestResizeHandle(ui.input.mouse_pos, options.handle_thickness)) |split| {
             result.cursor = cursorForSplit(self.dock.splitAxis(split) orelse .x);
@@ -284,7 +279,7 @@ pub const DockSpace = struct {
         if (mouseReleased(ui)) {
             if (self.drag) |drag| {
                 if (drag.dragging) {
-                    changed = self.finishDrag(ui.input.mouse_pos, drag, options) or changed;
+                    changed = self.finishDrag(ui.input.mouse_pos, drag) or changed;
                 }
                 self.drag = null;
             }
@@ -292,9 +287,9 @@ pub const DockSpace = struct {
         return changed;
     }
 
-    fn finishDrag(self: *DockSpace, mouse_pos: types.Vec2, drag: DragState, options: DockSpaceOptions) bool {
+    fn finishDrag(self: *DockSpace, mouse_pos: types.Vec2, drag: DragState) bool {
         if (self.dock.hitTestLeaf(mouse_pos)) |target_leaf| {
-            const zone = dropZoneFor(self.dock.nodeRect(target_leaf) orelse return false, mouse_pos, options);
+            const zone = dropZoneFor(self.dock.nodeRect(target_leaf) orelse return false, mouse_pos);
             if (drag.source_leaf) |source| {
                 if (source == target_leaf and zone == .center_tab) return false;
                 if (source == target_leaf and self.leafTabCount(source) <= 1) return false;
@@ -436,8 +431,8 @@ pub const DockSpace = struct {
                     setPanelStyled(ui, tab, tab_rect, .{ .x = leaf.rect.x, .y = leaf.rect.y }, tab_background, tab_border, if (is_dragged or is_hovered) 1 else 0, true, 6);
                     setLabel(ui, label, window.title, is_active);
                 }
-                ensureRootParent(ui, window.root_node, if (active != null and active.? == window_id) nodes.content else types.invalid_node);
-                if (active != null and active.? == window_id) {
+                ensureRootParent(ui, window.root_node, if (is_active) nodes.content else types.invalid_node);
+                if (is_active) {
                     setContentRoot(ui, window.root_node);
                     if (window_index < self.window_state.items.len) self.window_state.items[window_index].content_rect = content_rect;
                 }
@@ -460,8 +455,7 @@ pub const DockSpace = struct {
         setPanel(ui, nodes.handle, visual_rect, parent_origin, if (active or hovered) .accent else .transparent, true);
     }
 
-    fn syncFloatingNodes(self: *DockSpace, ui: *app.Ui, parent: types.NodeId, options: DockSpaceOptions) !void {
-        _ = options;
+    fn syncFloatingNodes(self: *DockSpace, ui: *app.Ui, parent: types.NodeId) !void {
         const parent_origin = nodeOrigin(ui, parent);
         for (self.windows.windows.items) |*window| {
             const window_id = window.id;
@@ -491,9 +485,9 @@ pub const DockSpace = struct {
     }
 
     fn tabAt(self: *const DockSpace, mouse_pos: types.Vec2, options: DockSpaceOptions) ?struct { leaf: types.DockNodeId, window: DockWindowId } {
-        for (self.dock.nodes.items, 0..) |node, i| {
+        for (self.dock.nodes.items, 0..) |*node, i| {
             const leaf_id = self.dock.idForSlot(i) orelse continue;
-            switch (node) {
+            switch (node.*) {
                 .leaf => |leaf| {
                     for (leaf.tabs.items, 0..) |window_id, tab_index| {
                         const rect = tabRect(leaf.rect, tab_index, leaf.tabs.items.len, options.tab_height);
@@ -517,13 +511,10 @@ pub const DockSpace = struct {
     }
 
     fn firstActiveWindow(self: *const DockSpace) ?DockWindowId {
-        for (self.dock.nodes.items, 0..) |_, i| {
+        // activeWindow already yields null for splits, so no kind check here.
+        for (0..self.dock.nodes.items.len) |i| {
             const id = self.dock.idForSlot(i) orelse continue;
-            const node = self.dock.resolveNodeConst(id).?.*;
-            switch (node) {
-                .leaf => if (self.dock.activeWindow(id)) |window| return window,
-                .split => {},
-            }
+            if (self.dock.activeWindow(id)) |window| return window;
         }
         return null;
     }
@@ -598,7 +589,7 @@ pub const DockSpace = struct {
         }
     }
 
-    fn syncDragFeedback(self: *DockSpace, ui: *app.Ui, parent: types.NodeId, options: DockSpaceOptions) void {
+    fn syncDragFeedback(self: *DockSpace, ui: *app.Ui, parent: types.NodeId) void {
         const parent_origin = nodeOrigin(ui, parent);
         const drag = self.drag orelse {
             hideNode(ui, self.overlays.drop_preview);
@@ -613,7 +604,7 @@ pub const DockSpace = struct {
 
         if (self.dock.hitTestLeaf(ui.input.mouse_pos)) |target_leaf| {
             if (self.dock.nodeRect(target_leaf)) |leaf_rect| {
-                const zone = dropZoneFor(leaf_rect, ui.input.mouse_pos, options);
+                const zone = dropZoneFor(leaf_rect, ui.input.mouse_pos);
                 const preview_rect = dropPreviewRect(leaf_rect, zone);
                 setPanelStyled(ui, self.overlays.drop_preview, preview_rect, parent_origin, .accent_soft, .accent, 2, false, 8);
             } else {
@@ -639,9 +630,23 @@ pub fn dockSpace(ui: *app.Ui, parent: types.NodeId, dock_space: *DockSpace, opti
     return dock_space.run(ui, parent, options);
 }
 
-fn createPanel(ui: *app.Ui, parent: types.NodeId) !types.NodeId {
-    return dock_view.createPanel(ui, parent);
-}
+// View and gesture helpers live in dock_view/dock_gesture; these aliases keep
+// the sync passes above reading in one vocabulary without a forwarding layer.
+const createPanel = dock_view.createPanel;
+const setPanel = dock_view.setPanel;
+const setPanelStyled = dock_view.setPanelStyled;
+const hideNode = dock_view.hideNode;
+const setContentRoot = dock_view.setContentRoot;
+const setLabel = dock_view.setLabel;
+const nodeOrigin = dock_view.nodeOrigin;
+const ensureRootParent = dock_view.ensureRootParent;
+/// Ensures `desired` are the trailing children of `parent`, in order.
+/// Re-appends (and therefore dirties the tree) only when the order differs.
+const ensureTailOrder = dock_view.ensureTailOrder;
+const cursorForSplit = dock_gesture.cursorForSplit;
+const resizeHandleVisualRect = dock_gesture.resizeHandleVisualRect;
+const dropZoneFor = dock_gesture.dropZoneFor;
+const dropPreviewRect = dock_gesture.dropPreviewRect;
 
 fn createLeafNodes(ui: *app.Ui, parent: types.NodeId) !LeafNodes {
     const host = try createPanel(ui, parent);
@@ -663,28 +668,6 @@ fn createFloatingNodes(ui: *app.Ui, parent: types.NodeId) !FloatingNodes {
     };
 }
 
-fn setPanel(ui: *app.Ui, id: types.NodeId, rect: types.Rect, origin: types.Vec2, background: theme_mod.ColorRole, interactive: bool) void {
-    dock_view.setPanel(ui, id, rect, origin, background, interactive);
-}
-
-fn setPanelStyled(
-    ui: *app.Ui,
-    id: types.NodeId,
-    rect: types.Rect,
-    origin: types.Vec2,
-    background: theme_mod.ColorRole,
-    border: theme_mod.ColorRole,
-    border_width: f32,
-    interactive: bool,
-    radius: f32,
-) void {
-    dock_view.setPanelStyled(ui, id, rect, origin, background, border, border_width, interactive, radius);
-}
-
-fn hideNode(ui: *app.Ui, id: types.NodeId) void {
-    dock_view.hideNode(ui, id);
-}
-
 /// Rect of the tab strip entry for `tab_index` inside a leaf. Tabs shrink
 /// evenly when the nominal width would overflow the leaf and are clipped to
 /// the leaf's right edge; shared by drawing and hit testing so they always
@@ -697,45 +680,6 @@ fn floatZLessThan(windows: *const window_manager_mod.WindowManager, a: DockWindo
     const za = if (windows.getConst(a)) |window| window.z_index else 0;
     const zb = if (windows.getConst(b)) |window| window.z_index else 0;
     return za < zb;
-}
-
-/// Ensures `desired` are the trailing children of `parent`, in order.
-/// Re-appends (and therefore dirties the tree) only when the order differs.
-fn ensureTailOrder(ui: *app.Ui, parent: types.NodeId, desired: []const types.NodeId) void {
-    dock_view.ensureTailOrder(ui, parent, desired);
-}
-
-fn nodeOrigin(ui: *const app.Ui, id: types.NodeId) types.Vec2 {
-    return dock_view.nodeOrigin(ui, id);
-}
-
-fn setContentRoot(ui: *app.Ui, id: types.NodeId) void {
-    dock_view.setContentRoot(ui, id);
-}
-
-fn resizeHandleVisualRect(rect: types.Rect, axis: dock_node.Axis, thickness: f32) types.Rect {
-    return dock_gesture.resizeHandleVisualRect(rect, axis, thickness);
-}
-
-fn setLabel(ui: *app.Ui, id: types.NodeId, text: []const u8, active: bool) void {
-    dock_view.setLabel(ui, id, text, active);
-}
-
-fn ensureRootParent(ui: *app.Ui, node_id: types.NodeId, parent: types.NodeId) void {
-    dock_view.ensureRootParent(ui, node_id, parent);
-}
-
-fn cursorForSplit(axis: dock_node.Axis) events.CursorKind {
-    return dock_gesture.cursorForSplit(axis);
-}
-
-fn dropZoneFor(rect: types.Rect, mouse_pos: types.Vec2, options: DockSpaceOptions) DropZone {
-    _ = options;
-    return dock_gesture.dropZoneFor(rect, mouse_pos);
-}
-
-fn dropPreviewRect(rect: types.Rect, zone: DropZone) types.Rect {
-    return dock_gesture.dropPreviewRect(rect, zone);
 }
 
 fn mousePressed(ui: *const app.Ui) bool {
@@ -934,7 +878,7 @@ test "dock space splits active tab from same leaf when dropped on edge" {
         .source_leaf = space.dock.root,
         .start_mouse = .{ .x = 130, .y = 10 },
         .dragging = true,
-    }, .{ .rect = .{ .x = 0, .y = 0, .w = 400, .h = 300 } });
+    });
 
     try std.testing.expect(changed);
     space.dock.layout(.{ .x = 0, .y = 0, .w = 400, .h = 300 });

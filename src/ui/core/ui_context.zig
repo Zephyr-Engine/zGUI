@@ -123,12 +123,10 @@ pub const Ui = struct {
 
     pub fn endFrame(self: *Ui) !void {
         const dirty_counts = self.tree.dirtyCounts();
-        const dirty_layout_count = dirty_counts.layout;
-        const dirty_paint_count = dirty_counts.paint;
 
         const resized = self.window_size.x != self.last_window_size.x or
             self.window_size.y != self.last_window_size.y;
-        const needs_layout = self.force_layout or resized or dirty_layout_count > 0;
+        const needs_layout = self.force_layout or resized or dirty_counts.layout > 0;
 
         if (needs_layout) {
             layout_mod.layoutTree(&self.tree, self.root, self.window_size, self.font_atlas);
@@ -144,7 +142,7 @@ pub const Ui = struct {
             layout_mod.layoutTree(&self.tree, self.root, self.window_size, self.font_atlas);
         }
 
-        const needs_paint = self.force_paint or needs_layout or scrolled or dirty_paint_count > 0;
+        const needs_paint = self.force_paint or needs_layout or scrolled or dirty_counts.paint > 0;
         if (needs_paint) {
             self.paint_list.clearRetainingCapacity();
             try paint_mod.buildPaintList(&self.tree, self.root, &self.paint_list);
@@ -156,7 +154,7 @@ pub const Ui = struct {
         self.last_window_size = self.window_size;
         self.force_layout = false;
         self.force_paint = false;
-        self.updateStats(dirty_layout_count, dirty_paint_count);
+        self.updateStats(dirty_counts.layout, dirty_counts.paint);
         self.tree.clearTrackedDirty();
     }
 

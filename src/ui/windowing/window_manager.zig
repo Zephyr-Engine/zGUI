@@ -90,12 +90,6 @@ pub const WindowManager = struct {
         return window;
     }
 
-    pub fn idForSlot(self: *const WindowManager, index: usize) ?types.WindowId {
-        if (index >= self.windows.items.len) return null;
-        const window = &self.windows.items[index];
-        return if (window.open) window.id else null;
-    }
-
     fn nextZ(self: *WindowManager) u32 {
         const z = self.next_z;
         self.next_z +%= 1;

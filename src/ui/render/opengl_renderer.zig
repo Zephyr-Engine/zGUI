@@ -132,6 +132,10 @@ pub const OpenGlRenderer = struct {
             self.uploaded_generation = data.generation;
         }
 
+        // Batches split on either a texture or a clip change, so consecutive
+        // batches routinely share one of the two; only push what actually moved.
+        var bound_texture: ?c.GLuint = null;
+        var bound_scissor: ?Scissor = null;
         for (data.batches) |batch| {
             if (batch.index_count == 0) continue;
             const native_texture = if (batch.texture == .none)
@@ -139,8 +143,14 @@ pub const OpenGlRenderer = struct {
             else
                 self.resolveTexture(batch.texture) orelse continue;
             const scissor = scissorRect(batch.clip_rect, self.logical_width, self.logical_height, self.framebuffer_width, self.framebuffer_height);
-            c.glScissor(scissor.x, scissor.y, scissor.w, scissor.h);
-            c.glBindTexture(c.GL_TEXTURE_2D, native_texture);
+            if (bound_scissor == null or !std.meta.eql(bound_scissor.?, scissor)) {
+                c.glScissor(scissor.x, scissor.y, scissor.w, scissor.h);
+                bound_scissor = scissor;
+            }
+            if (bound_texture != native_texture) {
+                c.glBindTexture(c.GL_TEXTURE_2D, native_texture);
+                bound_texture = native_texture;
+            }
             c.glDrawElements(
                 c.GL_TRIANGLES,
                 @intCast(batch.index_count),

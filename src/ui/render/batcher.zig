@@ -153,14 +153,15 @@ pub const Batcher = struct {
         try self.ensureBatch(white_texture, self.currentClip());
         const color = border.color.toU32();
         const base: u32 = @intCast(self.vertices.items.len);
+        try self.vertices.ensureUnusedCapacity(self.allocator, outer_count + inner_count);
         for (outer_points[0..outer_count]) |point| {
-            try self.vertices.append(self.allocator, .{ .pos = .{ point.x, point.y }, .uv = .{ 0, 0 }, .color = color });
+            self.vertices.appendAssumeCapacity(.{ .pos = .{ point.x, point.y }, .uv = .{ 0, 0 }, .color = color });
         }
         for (inner_points[0..inner_count]) |point| {
-            try self.vertices.append(self.allocator, .{ .pos = .{ point.x, point.y }, .uv = .{ 0, 0 }, .color = color });
+            self.vertices.appendAssumeCapacity(.{ .pos = .{ point.x, point.y }, .uv = .{ 0, 0 }, .color = color });
         }
 
-        const offset_before = self.indices.items.len;
+        try self.indices.ensureUnusedCapacity(self.allocator, outer_count * 6);
         var i: usize = 0;
         while (i < outer_count) : (i += 1) {
             const next = (i + 1) % outer_count;
@@ -168,12 +169,12 @@ pub const Batcher = struct {
             const outer_next = base + @as(u32, @intCast(next));
             const inner_current = base + @as(u32, @intCast(outer_count + i));
             const inner_next = base + @as(u32, @intCast(outer_count + next));
-            try self.indices.appendSlice(self.allocator, &.{
+            self.indices.appendSliceAssumeCapacity(&.{
                 outer_current, outer_next, inner_next,
                 outer_current, inner_next, inner_current,
             });
         }
-        self.batches.items[self.batches.items.len - 1].index_count += @intCast(self.indices.items.len - offset_before);
+        self.batches.items[self.batches.items.len - 1].index_count += @intCast(outer_count * 6);
 
         if (self.antialias_width > 0) {
             var fringe_points: [rounded_point_count]types.Vec2 = undefined;
@@ -270,18 +271,23 @@ pub const Batcher = struct {
         if (rect.isEmpty() or color.a == 0) return;
         try self.ensureBatch(texture, self.currentClip());
 
+        const packed_color = color.toU32();
+        const right = rect.x + rect.w;
+        const bottom = rect.y + rect.h;
         const base: u32 = @intCast(self.vertices.items.len);
-        try self.vertices.append(self.allocator, .{ .pos = .{ rect.x, rect.y }, .uv = .{ uv0.x, uv0.y }, .color = color.toU32() });
-        try self.vertices.append(self.allocator, .{ .pos = .{ rect.x + rect.w, rect.y }, .uv = .{ uv1.x, uv0.y }, .color = color.toU32() });
-        try self.vertices.append(self.allocator, .{ .pos = .{ rect.x + rect.w, rect.y + rect.h }, .uv = .{ uv1.x, uv1.y }, .color = color.toU32() });
-        try self.vertices.append(self.allocator, .{ .pos = .{ rect.x, rect.y + rect.h }, .uv = .{ uv0.x, uv1.y }, .color = color.toU32() });
+        try self.vertices.ensureUnusedCapacity(self.allocator, 4);
+        self.vertices.appendSliceAssumeCapacity(&.{
+            .{ .pos = .{ rect.x, rect.y }, .uv = .{ uv0.x, uv0.y }, .color = packed_color },
+            .{ .pos = .{ right, rect.y }, .uv = .{ uv1.x, uv0.y }, .color = packed_color },
+            .{ .pos = .{ right, bottom }, .uv = .{ uv1.x, uv1.y }, .color = packed_color },
+            .{ .pos = .{ rect.x, bottom }, .uv = .{ uv0.x, uv1.y }, .color = packed_color },
+        });
 
-        const offset_before = self.indices.items.len;
         try self.indices.appendSlice(self.allocator, &.{
             base, base + 1, base + 2,
             base, base + 2, base + 3,
         });
-        self.batches.items[self.batches.items.len - 1].index_count += @intCast(self.indices.items.len - offset_before);
+        self.batches.items[self.batches.items.len - 1].index_count += 6;
     }
 
     fn addRoundedTexturedRect(
@@ -309,7 +315,8 @@ pub const Batcher = struct {
         const base: u32 = @intCast(self.vertices.items.len);
         const center: types.Vec2 = .{ .x = rect.x + rect.w * 0.5, .y = rect.y + rect.h * 0.5 };
         const center_uv = uvForPoint(rect, uv0, uv1, center);
-        try self.vertices.append(self.allocator, .{
+        try self.vertices.ensureUnusedCapacity(self.allocator, count + 1);
+        self.vertices.appendAssumeCapacity(.{
             .pos = .{ center.x, center.y },
             .uv = .{ center_uv.x, center_uv.y },
             .color = color_u32,
@@ -317,21 +324,21 @@ pub const Batcher = struct {
 
         for (points[0..count]) |point| {
             const uv = uvForPoint(rect, uv0, uv1, point);
-            try self.vertices.append(self.allocator, .{
+            self.vertices.appendAssumeCapacity(.{
                 .pos = .{ point.x, point.y },
                 .uv = .{ uv.x, uv.y },
                 .color = color_u32,
             });
         }
 
-        const offset_before = self.indices.items.len;
+        try self.indices.ensureUnusedCapacity(self.allocator, count * 3);
         var i: usize = 0;
         while (i < count) : (i += 1) {
             const current = base + 1 + @as(u32, @intCast(i));
             const next = base + 1 + @as(u32, @intCast((i + 1) % count));
-            try self.indices.appendSlice(self.allocator, &.{ base, current, next });
+            self.indices.appendSliceAssumeCapacity(&.{ base, current, next });
         }
-        self.batches.items[self.batches.items.len - 1].index_count += @intCast(self.indices.items.len - offset_before);
+        self.batches.items[self.batches.items.len - 1].index_count += @intCast(count * 3);
 
         if (self.antialias_width > 0) {
             var fringe_points: [rounded_point_count]types.Vec2 = undefined;
@@ -366,25 +373,28 @@ pub const Batcher = struct {
         if (inner_points.len < 3 or inner_points.len != outer_points.len) return;
 
         try self.ensureBatch(texture, self.currentClip());
+        const inner_u32 = inner_color.toU32();
+        const outer_u32 = outer_color.toU32();
         const base: u32 = @intCast(self.vertices.items.len);
+        try self.vertices.ensureUnusedCapacity(self.allocator, inner_points.len + outer_points.len);
         for (inner_points) |point| {
             const uv = uvForPoint(uv_rect, uv0, uv1, point);
-            try self.vertices.append(self.allocator, .{
+            self.vertices.appendAssumeCapacity(.{
                 .pos = .{ point.x, point.y },
                 .uv = .{ uv.x, uv.y },
-                .color = inner_color.toU32(),
+                .color = inner_u32,
             });
         }
         for (outer_points) |point| {
             const uv = uvForPoint(uv_rect, uv0, uv1, point);
-            try self.vertices.append(self.allocator, .{
+            self.vertices.appendAssumeCapacity(.{
                 .pos = .{ point.x, point.y },
                 .uv = .{ uv.x, uv.y },
-                .color = outer_color.toU32(),
+                .color = outer_u32,
             });
         }
 
-        const offset_before = self.indices.items.len;
+        try self.indices.ensureUnusedCapacity(self.allocator, inner_points.len * 6);
         var i: usize = 0;
         while (i < inner_points.len) : (i += 1) {
             const next = (i + 1) % inner_points.len;
@@ -392,12 +402,12 @@ pub const Batcher = struct {
             const inner_next = base + @as(u32, @intCast(next));
             const outer_current = base + @as(u32, @intCast(inner_points.len + i));
             const outer_next = base + @as(u32, @intCast(inner_points.len + next));
-            try self.indices.appendSlice(self.allocator, &.{
+            self.indices.appendSliceAssumeCapacity(&.{
                 inner_current, inner_next, outer_next,
                 inner_current, outer_next, outer_current,
             });
         }
-        self.batches.items[self.batches.items.len - 1].index_count += @intCast(self.indices.items.len - offset_before);
+        self.batches.items[self.batches.items.len - 1].index_count += @intCast(inner_points.len * 6);
     }
 
     fn ensureBatch(self: *Batcher, texture: types.TextureHandle, clip: types.Rect) !void {
@@ -456,9 +466,19 @@ fn clampedRadii(rect: types.Rect, radius: style_mod.CornerRadii) style_mod.Corne
     };
 }
 
+/// Equivalent to testing `clampedRadii` for a positive corner, without paying
+/// for the four clamps: clamping only ever shrinks a radius toward zero, and it
+/// zeroes every corner of a degenerate rect.
 fn hasRoundedCorner(rect: types.Rect, radius: style_mod.CornerRadii) bool {
-    const r = clampedRadii(rect, radius);
-    return r.top_left > 0 or r.top_right > 0 or r.bottom_right > 0 or r.bottom_left > 0;
+    if (rect.isEmpty()) return false;
+    return isPositiveRadius(radius.top_left) or
+        isPositiveRadius(radius.top_right) or
+        isPositiveRadius(radius.bottom_right) or
+        isPositiveRadius(radius.bottom_left);
+}
+
+fn isPositiveRadius(radius: f32) bool {
+    return radius > 0 and std.math.isFinite(radius);
 }
 
 fn insetRadii(radius: style_mod.CornerRadii, amount: f32) style_mod.CornerRadii {
@@ -615,6 +635,42 @@ test "rounded border renders when inner radii clamp to zero" {
 
     try std.testing.expect(data.vertices.len > 0);
     try std.testing.expect(data.indices.len > 0);
+}
+
+test "batch index ranges tile the index buffer exactly" {
+    var batcher = Batcher.init(std.testing.allocator);
+    defer batcher.deinit();
+
+    const color = types.Color.rgba(200, 120, 60, 255);
+    const data = try batcher.build(&.{
+        .{ .rect = .{ .rect = .{ .x = 0, .y = 0, .w = 50, .h = 20 }, .color = color } },
+        .{ .clip_push = .{ .x = 0, .y = 0, .w = 40, .h = 40 } },
+        .{ .rect = .{ .rect = .{ .x = 4, .y = 4, .w = 30, .h = 30 }, .color = color, .radius = style_mod.CornerRadii.all(8) } },
+        .{ .border = .{
+            .rect = .{ .x = 2, .y = 2, .w = 36, .h = 24 },
+            .color = color,
+            .widths = style_mod.Edges.all(2),
+            .radius = style_mod.CornerRadii.all(6),
+        } },
+        .clip_pop,
+        .{ .border = .{
+            .rect = .{ .x = 0, .y = 0, .w = 20, .h = 20 },
+            .color = color,
+            .widths = .{ .top = 1, .bottom = 3, .left = 2, .right = 4 },
+        } },
+    }, null, 1);
+
+    try std.testing.expect(data.indices.len > 0);
+
+    // Batches must partition the index buffer with no gap and no overlap.
+    var expected_offset: u32 = 0;
+    for (data.batches) |batch| {
+        try std.testing.expectEqual(expected_offset, batch.index_offset);
+        expected_offset += batch.index_count;
+    }
+    try std.testing.expectEqual(data.indices.len, @as(usize, expected_offset));
+
+    for (data.indices) |index| try std.testing.expect(index < data.vertices.len);
 }
 
 test "text commands emit atlas glyph quads" {

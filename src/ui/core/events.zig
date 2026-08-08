@@ -64,17 +64,6 @@ pub const EventHandler = struct {
         };
     }
 
-    pub fn stateless(comptime function: fn (Event) void) EventHandler {
-        return .{
-            .context = null,
-            .function = struct {
-                fn invoke(_: ?*anyopaque, event: Event) void {
-                    function(event);
-                }
-            }.invoke,
-        };
-    }
-
     pub fn call(self: EventHandler, event: Event) void {
         self.function(self.context, event);
     }

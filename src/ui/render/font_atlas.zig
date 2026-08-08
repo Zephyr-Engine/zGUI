@@ -49,6 +49,7 @@ pub const FontAtlas = struct {
     glyphs: std.AutoHashMap(GlyphKey, Glyph),
     advances: std.AutoHashMap(GlyphKey, f32),
     kern_pairs: std.AutoHashMap(KernKey, f32),
+    renderable: std.AutoHashMap(u21, u21),
     ascent: c_int = 0,
     descent: c_int = 0,
     line_gap: c_int = 0,
@@ -92,6 +93,7 @@ pub const FontAtlas = struct {
             .glyphs = std.AutoHashMap(GlyphKey, Glyph).init(allocator),
             .advances = std.AutoHashMap(GlyphKey, f32).init(allocator),
             .kern_pairs = std.AutoHashMap(KernKey, f32).init(allocator),
+            .renderable = std.AutoHashMap(u21, u21).init(allocator),
             .ascent = ascent,
             .descent = descent,
             .line_gap = line_gap,
@@ -100,6 +102,7 @@ pub const FontAtlas = struct {
     }
 
     pub fn deinit(self: *FontAtlas) void {
+        self.renderable.deinit();
         self.kern_pairs.deinit();
         self.advances.deinit();
         self.glyphs.deinit();
@@ -268,16 +271,14 @@ pub const FontAtlas = struct {
 
         const dst_x = allocation.x + padding;
         const dst_y = allocation.y + padding;
+        // Every atlas texel holds RGB 255 from init (see clearPixels) and
+        // nothing ever changes it, so the blit only writes the alpha channel.
         var row: u32 = 0;
         while (row < bitmap_h) : (row += 1) {
-            var col: u32 = 0;
-            while (col < bitmap_w) : (col += 1) {
-                const src_index = @as(usize, row) * @as(usize, bitmap_w) + @as(usize, col);
-                const dst_index = ((@as(usize, dst_y + row) * @as(usize, self.width)) + @as(usize, dst_x + col)) * 4;
-                self.pixels[dst_index + 0] = 255;
-                self.pixels[dst_index + 1] = 255;
-                self.pixels[dst_index + 2] = 255;
-                self.pixels[dst_index + 3] = coverage[src_index];
+            const src_row = coverage[@as(usize, row) * @as(usize, bitmap_w) ..][0..bitmap_w];
+            const dst_row = (@as(usize, dst_y + row) * @as(usize, self.width) + @as(usize, dst_x)) * 4;
+            for (src_row, 0..) |value, col| {
+                self.pixels[dst_row + col * 4 + 3] = value;
             }
         }
 
@@ -346,10 +347,19 @@ pub const FontAtlas = struct {
         return @as(f32, @floatFromInt(advance_width)) * scale;
     }
 
-    fn renderableCodepoint(self: *const FontAtlas, codepoint: u21) u21 {
+    /// Resolves a codepoint to the one actually rendered, substituting '?' when
+    /// the font has no glyph. stbtt_FindGlyphIndex searches the font's cmap, and
+    /// this runs for every character of every measure and raster pass, so the
+    /// answer is memoized alongside the advance and kerning caches.
+    fn renderableCodepoint(self: *FontAtlas, codepoint: u21) u21 {
         if (codepoint == '\n' or codepoint == '\t') return codepoint;
-        if (c.stbtt_FindGlyphIndex(&self.font_info, @intCast(codepoint)) != 0) return codepoint;
-        return '?';
+        if (self.renderable.get(codepoint)) |resolved| return resolved;
+        const resolved: u21 = if (c.stbtt_FindGlyphIndex(&self.font_info, @intCast(codepoint)) != 0)
+            codepoint
+        else
+            '?';
+        self.renderable.put(codepoint, resolved) catch {};
+        return resolved;
     }
 
     fn scaleForSize(self: *const FontAtlas, size: f32) f32 {
@@ -465,6 +475,33 @@ test "font atlas packs glyphs without overlap" {
         a.atlas_y + a.atlas_h <= b.atlas_y or
         b.atlas_y + b.atlas_h <= a.atlas_y;
     try std.testing.expect(separated);
+}
+
+test "rasterized glyphs keep atlas rgb at opaque white" {
+    // The glyph blit writes only the alpha channel and relies on this invariant.
+    const font_bytes = try loadTestFont(std.testing.allocator);
+    defer std.testing.allocator.free(font_bytes);
+
+    var atlas = try FontAtlas.init(std.testing.allocator, font_bytes, 256, 256);
+    defer atlas.deinit();
+
+    const glyph = try atlas.getGlyph('W', 32);
+    try std.testing.expect(glyph.atlas_w > 0 and glyph.atlas_h > 0);
+
+    var any_coverage = false;
+    var row: u32 = 0;
+    while (row < glyph.atlas_h) : (row += 1) {
+        var col: u32 = 0;
+        while (col < glyph.atlas_w) : (col += 1) {
+            const i = ((@as(usize, glyph.atlas_y + row) * @as(usize, atlas.width)) +
+                @as(usize, glyph.atlas_x + col)) * 4;
+            try std.testing.expectEqual(@as(u8, 255), atlas.pixels[i + 0]);
+            try std.testing.expectEqual(@as(u8, 255), atlas.pixels[i + 1]);
+            try std.testing.expectEqual(@as(u8, 255), atlas.pixels[i + 2]);
+            if (atlas.pixels[i + 3] != 0) any_coverage = true;
+        }
+    }
+    try std.testing.expect(any_coverage);
 }
 
 test "font atlas falls back to question mark for missing glyphs" {

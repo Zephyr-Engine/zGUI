@@ -167,7 +167,6 @@ pub const GlfwPlatform = struct {
         _ = c.glfwSetKeyCallback(self.window, keyCallback);
         _ = c.glfwSetCharCallback(self.window, charCallback);
         _ = c.glfwSetWindowSizeCallback(self.window, windowSizeCallback);
-        _ = c.glfwSetFramebufferSizeCallback(self.window, framebufferSizeCallback);
         _ = c.glfwSetWindowCloseCallback(self.window, windowCloseCallback);
         self.callbacks_installed = true;
     }
@@ -235,12 +234,6 @@ pub const GlfwPlatform = struct {
     fn windowSizeCallback(window: ?*c.GLFWwindow, width: c_int, height: c_int) callconv(.c) void {
         const self = fromWindow(window) orelse return;
         self.appendEvent(.{ .window_resize = .{ .x = @floatFromInt(width), .y = @floatFromInt(height) } });
-    }
-
-    fn framebufferSizeCallback(window: ?*c.GLFWwindow, width: c_int, height: c_int) callconv(.c) void {
-        _ = window;
-        _ = width;
-        _ = height;
     }
 
     fn windowCloseCallback(window: ?*c.GLFWwindow) callconv(.c) void {

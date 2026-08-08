@@ -27,28 +27,3 @@ pub fn markPaintDirty(tree: *tree_mod.UiTree, id: types.NodeId) void {
     }
 }
 
-pub fn markTextDirty(tree: *tree_mod.UiTree, id: types.NodeId) void {
-    if (tree.get(id)) |node| {
-        node.dirty.text = true;
-        node.dirty.layout = true;
-        node.dirty.paint = true;
-        tree.queueDirty(id);
-    }
-    markLayoutDirty(tree, id);
-}
-
-pub fn markChildrenDirty(tree: *tree_mod.UiTree, id: types.NodeId) void {
-    if (tree.get(id)) |node| {
-        node.dirty.children = true;
-        node.dirty.layout = true;
-        node.dirty.paint = true;
-        tree.queueDirty(id);
-    }
-    markLayoutDirty(tree, id);
-}
-
-pub fn clearDirty(tree: *tree_mod.UiTree, id: types.NodeId) void {
-    if (tree.get(id)) |node| {
-        node.dirty = .{};
-    }
-}

@@ -202,11 +202,6 @@ pub const DockManager = struct {
         split.ratio = clampRatio(split.*, split.ratio, split.rect);
     }
 
-    pub fn setSplitRatio(self: *DockManager, split_id: types.DockNodeId, ratio: f32) !void {
-        const split = self.splitPtr(split_id) orelse return error.InvalidDockTarget;
-        split.ratio = clampRatio(split.*, sanitizeRatio(ratio), split.rect);
-    }
-
     pub fn splitRatio(self: *const DockManager, split_id: types.DockNodeId) ?f32 {
         const split = self.splitConstPtr(split_id) orelse return null;
         return split.ratio;
