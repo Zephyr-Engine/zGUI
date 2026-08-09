@@ -115,9 +115,6 @@ pub const Ui = struct {
         for (frame.events) |event| {
             try self.routePlatformEvent(event);
         }
-        // Tree geometry can change without a mouse-move event, so refresh hover
-        // once more against the retained bounds before application code runs.
-        input_mod.updateHovered(&self.tree, self.root, &self.input);
         self.dispatchFrameEvents();
     }
 
@@ -142,7 +139,18 @@ pub const Ui = struct {
             layout_mod.layoutTree(&self.tree, self.root, self.window_size, self.font_atlas);
         }
 
-        const needs_paint = self.force_paint or needs_layout or scrolled or dirty_counts.paint > 0;
+        // Geometry can change while the pointer stays still. Refresh hover
+        // after the final layout, rather than hit-testing the whole tree at
+        // every beginFrame. This both keeps hover state in sync with relayouts
+        // and makes idle retained frames avoid an otherwise redundant walk.
+        var hover_changed = false;
+        if (needs_layout or scrolled) {
+            const previous_hovered = self.input.hovered;
+            input_mod.updateHovered(&self.tree, self.root, &self.input);
+            hover_changed = self.input.hovered != previous_hovered;
+        }
+
+        const needs_paint = self.force_paint or needs_layout or scrolled or hover_changed or dirty_counts.paint > 0;
         if (needs_paint) {
             self.paint_list.clearRetainingCapacity();
             try paint_mod.buildPaintList(&self.tree, self.root, &self.paint_list);
@@ -680,6 +688,34 @@ test "paint-only style changes do not dirty layout" {
     const counts = ui_state.tree.dirtyCounts();
     try std.testing.expectEqual(@as(u32, 0), counts.layout);
     try std.testing.expectEqual(@as(u32, 1), counts.paint);
+}
+
+test "relayout refreshes hover for a stationary pointer" {
+    var ui_state = try Ui.init(std.testing.allocator);
+    defer ui_state.deinit();
+
+    const button = try ui_state.createNode(.button);
+    try ui_state.tree.appendChild(ui_state.root, button);
+
+    var style = ui_state.nodeStyle(button).?;
+    style.width = .{ .px = 20 };
+    style.height = .{ .px = 20 };
+    style.margin.left = 50;
+    try ui_state.setStyle(button, style);
+
+    try ui_state.beginFrame(.{
+        .events = &.{.{ .mouse_move = .{ .x = 10, .y = 10 } }},
+        .window_size = .{ .x = 100, .y = 100 },
+    });
+    try ui_state.endFrame();
+    try std.testing.expectEqual(types.invalid_node, ui_state.input.hovered);
+
+    style.margin.left = 0;
+    try ui_state.setStyle(button, style);
+    try ui_state.beginFrame(.{ .window_size = .{ .x = 100, .y = 100 } });
+    try ui_state.endFrame();
+
+    try std.testing.expectEqual(button, ui_state.input.hovered);
 }
 
 fn createInteractionTestButton(ui_state: *Ui, bounds: types.Rect) !types.NodeId {

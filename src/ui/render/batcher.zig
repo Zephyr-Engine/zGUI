@@ -203,21 +203,24 @@ pub const Batcher = struct {
         var x = origin_x;
         var baseline_y = text.pos.y;
         var previous: ?u21 = null;
+        var text_batch_started = false;
+        const line_height = atlas.lineHeightScaled(text.size, raster_scale);
+        const space_advance = atlas.spaceAdvanceScaled(text.size, raster_scale);
         var it = text_mod.Utf8Iterator.init(text.text);
 
         while (it.next()) |codepoint| {
             switch (codepoint) {
                 '\n' => {
                     x = origin_x;
-                    baseline_y += atlas.lineHeightScaled(text.size, raster_scale);
+                    baseline_y += line_height;
                     previous = null;
                 },
                 '\t' => {
-                    x += atlas.spaceAdvanceScaled(text.size, raster_scale) * 4;
+                    x += space_advance * 4;
                     previous = null;
                 },
                 ' ' => {
-                    x += atlas.spaceAdvanceScaled(text.size, raster_scale);
+                    x += space_advance;
                     previous = null;
                 },
                 else => {
@@ -225,12 +228,19 @@ pub const Batcher = struct {
                     if (previous) |left| x += atlas.kerningScaled(left, glyph.codepoint, text.size, raster_scale);
 
                     if (glyph.size.x > 0 and glyph.size.y > 0) {
-                        try self.addGlyphQuad(.{
+                        // A text command uses one texture and one clip. Set
+                        // up (or reuse) its batch once, then append glyphs
+                        // directly instead of rechecking batch state per quad.
+                        if (!text_batch_started) {
+                            try self.ensureBatch(atlas.texture, self.currentClip());
+                            text_batch_started = true;
+                        }
+                        try self.addGlyphQuadToCurrentBatch(.{
                             .x = snapToRasterPixel(x + glyph.offset.x, raster_scale),
                             .y = snapToRasterPixel(baseline_y + glyph.offset.y, raster_scale),
                             .w = glyph.size.x,
                             .h = glyph.size.y,
-                        }, glyph, text.color, atlas.texture);
+                        }, glyph, text.color);
                     }
 
                     x += glyph.advance;
@@ -249,14 +259,12 @@ pub const Batcher = struct {
         try self.addTexturedRect(image.rect, image.uv0, image.uv1, image.tint, image.texture);
     }
 
-    fn addGlyphQuad(self: *Batcher, rect: types.Rect, glyph: font_atlas_mod.Glyph, color: types.Color, texture: types.TextureHandle) !void {
-        if (rect.isEmpty()) return;
-        try self.addTexturedRect(
+    fn addGlyphQuadToCurrentBatch(self: *Batcher, rect: types.Rect, glyph: font_atlas_mod.Glyph, color: types.Color) !void {
+        try self.addTexturedRectToCurrentBatch(
             rect,
             .{ .x = glyph.uv0.x, .y = glyph.uv0.y },
             .{ .x = glyph.uv1.x, .y = glyph.uv1.y },
             color,
-            texture,
         );
     }
 
@@ -270,6 +278,19 @@ pub const Batcher = struct {
     ) !void {
         if (rect.isEmpty() or color.a == 0) return;
         try self.ensureBatch(texture, self.currentClip());
+        try self.addTexturedRectToCurrentBatch(rect, uv0, uv1, color);
+    }
+
+    /// Appends geometry after its texture and clip have been selected by the
+    /// caller. Text uses this for every glyph in one command.
+    fn addTexturedRectToCurrentBatch(
+        self: *Batcher,
+        rect: types.Rect,
+        uv0: types.Vec2,
+        uv1: types.Vec2,
+        color: types.Color,
+    ) !void {
+        if (rect.isEmpty() or color.a == 0) return;
 
         const packed_color = color.toU32();
         const right = rect.x + rect.w;
@@ -283,7 +304,8 @@ pub const Batcher = struct {
             .{ .pos = .{ rect.x, bottom }, .uv = .{ uv0.x, uv1.y }, .color = packed_color },
         });
 
-        try self.indices.appendSlice(self.allocator, &.{
+        try self.indices.ensureUnusedCapacity(self.allocator, 6);
+        self.indices.appendSliceAssumeCapacity(&.{
             base, base + 1, base + 2,
             base, base + 2, base + 3,
         });
