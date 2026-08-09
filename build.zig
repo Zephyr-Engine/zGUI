@@ -32,6 +32,24 @@ pub fn build(b: *std.Build) void {
     });
     glfw_mod.linkLibrary(glfw_dep.artifact("glfw"));
 
+    const native_menu_mod = b.addModule("zGUI_native", .{
+        .root_source_file = b.path("src/native_menu.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    native_menu_mod.linkSystemLibrary("c", .{});
+    if (target.result.os.tag == .linux) {
+        native_menu_mod.addCSourceFile(.{ .file = b.path("src/native_menu_linux.c") });
+    }
+    if (target.result.os.tag == .macos) {
+        native_menu_mod.addCSourceFile(.{ .file = b.path("src/native_menu_macos.m") });
+        native_menu_mod.linkFramework("AppKit", .{});
+    }
+    if (target.result.os.tag == .windows) {
+        native_menu_mod.addCSourceFile(.{ .file = b.path("src/native_menu_windows.c") });
+        native_menu_mod.linkSystemLibrary("user32", .{});
+    }
+
     const core_mod = b.addModule("zGUI_core", .{
         .root_source_file = b.path("src/core.zig"),
         .target = target,

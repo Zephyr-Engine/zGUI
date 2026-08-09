@@ -1,0 +1,21 @@
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+typedef void (*NativeCallback)(void *, uint64_t);
+typedef struct Action { uint64_t id; UINT command; struct Action *next; } Action;
+typedef struct NativeMenu { HWND host, child; NativeCallback callback; void *context; Action *actions; UINT next_command; } NativeMenu;
+
+static const wchar_t *class_name = L"ZGuiNativeMenuHost";
+static ATOM class_atom;
+static wchar_t *utf8_to_wide(const char *text, size_t len) { int count = MultiByteToWideChar(CP_UTF8, 0, text, (int)len, NULL, 0); if (!count) return NULL; wchar_t *out = calloc((size_t)count + 1, sizeof(wchar_t)); if (out) MultiByteToWideChar(CP_UTF8, 0, text, (int)len, out, count); return out; }
+static void resize_child(NativeMenu *native) { RECT rect; GetClientRect(native->host, &rect); MoveWindow(native->child, 0, 0, rect.right, rect.bottom, TRUE); }
+static LRESULT CALLBACK host_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) { NativeMenu *native = (NativeMenu *)GetWindowLongPtrW(hwnd, GWLP_USERDATA); switch (message) { case WM_SIZE: if (native) resize_child(native); return 0; case WM_COMMAND: if (native) for (Action *a = native->actions; a; a = a->next) if (a->command == LOWORD(wparam)) { native->callback(native->context, a->id); return 0; } break; case WM_DESTROY: if (native) { native->host = NULL; native->callback(native->context, UINT64_MAX); } return 0; } return DefWindowProcW(hwnd, message, wparam, lparam); }
+static int register_class(void) { if (class_atom) return 1; WNDCLASSW wc = {0}; wc.lpfnWndProc = host_proc; wc.hInstance = GetModuleHandleW(NULL); wc.lpszClassName = class_name; wc.hCursor = LoadCursor(NULL, IDC_ARROW); class_atom = RegisterClassW(&wc); return class_atom != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS; }
+void *zgui_native_menu_create(uintptr_t child_handle, const char *title, size_t title_len, void *context, NativeCallback callback) { if (!child_handle || !callback || !register_class()) return NULL; NativeMenu *native = calloc(1, sizeof(*native)); if (!native) return NULL; native->callback = callback; native->context = context; native->next_command = 1000; wchar_t *wide = utf8_to_wide(title, title_len); native->host = CreateWindowExW(0, class_name, wide ? wide : L"", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720, NULL, NULL, GetModuleHandleW(NULL), NULL); free(wide); if (!native->host) { free(native); return NULL; } SetWindowLongPtrW(native->host, GWLP_USERDATA, (LONG_PTR)native); native->child = (HWND)child_handle; SetParent(native->child, native->host); SetWindowLongPtrW(native->child, GWL_STYLE, WS_CHILD | WS_VISIBLE); ShowWindow(native->host, SW_MAXIMIZE); resize_child(native); return native; }
+void *zgui_native_menu_add_menu(void *handle, const char *label, size_t len) { NativeMenu *native = handle; if (!native || !native->host) return NULL; HMENU main = GetMenu(native->host); if (!main) { main = CreateMenu(); SetMenu(native->host, main); } HMENU submenu = CreatePopupMenu(); wchar_t *wide = utf8_to_wide(label, len); AppendMenuW(main, MF_POPUP, (UINT_PTR)submenu, wide ? wide : L""); free(wide); DrawMenuBar(native->host); return submenu; }
+int zgui_native_menu_add_item(void *handle, void *menu, const char *label, size_t len, uint64_t id) { NativeMenu *native = handle; if (!native || !menu) return 0; Action *action = calloc(1, sizeof(*action)); if (!action) return 0; action->id = id; action->command = native->next_command++; action->next = native->actions; native->actions = action; wchar_t *wide = utf8_to_wide(label, len); AppendMenuW((HMENU)menu, MF_STRING, action->command, wide ? wide : L""); free(wide); return 1; }
+void zgui_native_menu_poll(void *handle) { (void)handle; MSG msg; while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&msg); DispatchMessageW(&msg); } }
+int zgui_native_menu_content_width(void *handle) { NativeMenu *native = handle; if (!native || !native->host) return 0; RECT rect; GetClientRect(native->host, &rect); return rect.right; }
+void zgui_native_menu_destroy(void *handle) { NativeMenu *native = handle; if (!native) return; if (native->host) DestroyWindow(native->host); while (native->actions) { Action *next = native->actions->next; free(native->actions); native->actions = next; } free(native); }

@@ -84,6 +84,9 @@ pub const DockSpace = struct {
     sync_stamp: u32 = 0,
     order_scratch: std.ArrayList(types.NodeId) = .empty,
     float_scratch: std.ArrayList(DockWindowId) = .empty,
+    // Nodes owned by the embedding application that should render above all
+    // dock chrome (for example, application menus and context popups).
+    external_overlays: std.ArrayList(types.NodeId) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) !DockSpace {
         return .{
@@ -94,6 +97,7 @@ pub const DockSpace = struct {
     }
 
     pub fn deinit(self: *DockSpace) void {
+        self.external_overlays.deinit(self.allocator);
         self.float_scratch.deinit(self.allocator);
         self.order_scratch.deinit(self.allocator);
         self.window_state.deinit(self.allocator);
@@ -180,6 +184,24 @@ pub const DockSpace = struct {
         return self.drag != null or self.dock.activeResizeSplit() != null;
     }
 
+    /// Registers an application-owned node to be painted above dock chrome.
+    /// The caller retains ownership and must unregister it before destroying
+    /// the node.
+    pub fn registerOverlay(self: *DockSpace, node: types.NodeId) !void {
+        for (self.external_overlays.items) |existing| {
+            if (existing == node) return;
+        }
+        try self.external_overlays.append(self.allocator, node);
+    }
+
+    pub fn unregisterOverlay(self: *DockSpace, node: types.NodeId) void {
+        for (self.external_overlays.items, 0..) |existing, index| {
+            if (existing != node) continue;
+            _ = self.external_overlays.orderedRemove(index);
+            return;
+        }
+    }
+
     pub fn windowContentRect(self: *const DockSpace, window: DockWindowId) ?types.Rect {
         if (self.windows.getConst(window) == null) return null;
         const index = types.windowIndex(window);
@@ -195,8 +217,11 @@ pub const DockSpace = struct {
         self.dock.layout(options.rect);
 
         var result: DockSpaceResult = .{};
-        result.changed = self.updateResize(ui, options);
-        if (self.updateTabsAndDrops(ui, options)) result.changed = true;
+        const overlay_captures_pointer = self.externalOverlayContains(ui);
+        if (!overlay_captures_pointer) {
+            result.changed = self.updateResize(ui, options);
+            if (self.updateTabsAndDrops(ui, options)) result.changed = true;
+        }
         try self.ensureNodeCapacity(ui, parent);
         try self.ensureOverlayNodes(ui, parent);
 
@@ -218,9 +243,18 @@ pub const DockSpace = struct {
         if (self.isInteracting()) {
             ui.capturePointer();
         }
+        if (overlay_captures_pointer) ui.capturePointer();
 
         result.active_window = self.firstActiveWindow();
         return result;
+    }
+
+    fn externalOverlayContains(self: *const DockSpace, ui: *const app.Ui) bool {
+        for (self.external_overlays.items) |id| {
+            const node = ui.tree.getConst(id) orelse continue;
+            if (node.flags.visible and node.bounds.contains(ui.input.mouse_pos)) return true;
+        }
+        return false;
     }
 
     fn updateResize(self: *DockSpace, ui: *app.Ui, options: DockSpaceOptions) bool {
@@ -374,6 +408,7 @@ pub const DockSpace = struct {
 
         try self.order_scratch.append(self.allocator, self.overlays.drop_preview);
         try self.order_scratch.append(self.allocator, self.overlays.drag_ghost);
+        try self.order_scratch.appendSlice(self.allocator, self.external_overlays.items);
         ensureTailOrder(ui, parent, self.order_scratch.items);
     }
 
