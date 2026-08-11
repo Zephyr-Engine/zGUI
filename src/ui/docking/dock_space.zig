@@ -27,8 +27,8 @@ pub const DockSpaceResult = struct {
     active_window: ?DockWindowId = null,
 };
 
-const tab_nominal_width: f32 = 116;
-const tab_min_width: f32 = 40;
+const tab_nominal_width: f32 = 92;
+const tab_min_width: f32 = 36;
 const floating_title_height: f32 = 30;
 
 const LeafNodes = struct {
@@ -236,6 +236,9 @@ pub const DockSpace = struct {
         }
         if (self.dock.activeResizeSplit()) |split| {
             result.cursor = cursorForSplit(self.dock.splitAxis(split) orelse .x);
+        }
+        if (result.cursor == .arrow and self.tabAt(ui.input.mouse_pos, options) != null) {
+            result.cursor = .hand;
         }
         if (result.cursor != .arrow) {
             ui.requestCursor(result.cursor);
@@ -454,16 +457,30 @@ pub const DockSpace = struct {
                     const is_hovered = tab_rect.contains(ui.input.mouse_pos);
                     const is_dragged = if (self.drag) |drag| drag.window == window_id else false;
                     ensureRootParent(ui, tab, nodes.tab_bar);
+                    // A selected tab is deliberately the same surface as its
+                    // content, visually joining the two. Inactive tabs remain
+                    // lighter so the current panel is obvious at a glance.
                     const tab_background: theme_mod.ColorRole = if (is_dragged)
                         .accent_soft
                     else if (is_active)
-                        .control
+                        .shell
                     else if (is_hovered)
-                        .panel_soft
+                        .control
                     else
-                        .transparent;
-                    const tab_border: theme_mod.ColorRole = if (is_dragged or is_hovered) .accent else .transparent;
-                    setPanelStyled(ui, tab, tab_rect, .{ .x = leaf.rect.x, .y = leaf.rect.y }, tab_background, tab_border, if (is_dragged or is_hovered) 1 else 0, true, 6);
+                        .panel_soft;
+                    // Keep the tabs calm: selection is a compact accent rule
+                    // rather than a heavy box outline. Background and label
+                    // contrast still distinguish the active panel without
+                    // relying on the accent colour alone.
+                    const tab_border: theme_mod.ColorRole = if (is_dragged or is_active) .accent else .transparent;
+                    setPanelStyledWithShape(ui, tab, tab_rect, .{ .x = leaf.rect.x, .y = leaf.rect.y }, tab_background, tab_border, .{
+                        .top = if (is_dragged) 1 else if (is_active) 2 else 0,
+                    }, true, .{
+                        .top_left = if (is_active or is_dragged) 5 else 0,
+                        .top_right = if (is_active or is_dragged) 5 else 0,
+                        .bottom_left = 0,
+                        .bottom_right = 0,
+                    });
                     setLabel(ui, label, window.title, is_active);
                 }
                 ensureRootParent(ui, window.root_node, if (is_active) nodes.content else types.invalid_node);
@@ -670,6 +687,7 @@ pub fn dockSpace(ui: *app.Ui, parent: types.NodeId, dock_space: *DockSpace, opti
 const createPanel = dock_view.createPanel;
 const setPanel = dock_view.setPanel;
 const setPanelStyled = dock_view.setPanelStyled;
+const setPanelStyledWithShape = dock_view.setPanelStyledWithShape;
 const hideNode = dock_view.hideNode;
 const setContentRoot = dock_view.setContentRoot;
 const setLabel = dock_view.setLabel;

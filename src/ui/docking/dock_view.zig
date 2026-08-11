@@ -30,6 +30,30 @@ pub fn setPanelStyled(
     interactive: bool,
     radius: f32,
 ) void {
+    setPanelStyledWithShape(
+        ui,
+        id,
+        rect,
+        origin,
+        background,
+        border,
+        style.Edges.all(border_width),
+        interactive,
+        style.CornerRadii.all(radius),
+    );
+}
+
+pub fn setPanelStyledWithShape(
+    ui: *app.Ui,
+    id: types.NodeId,
+    rect: types.Rect,
+    origin: types.Vec2,
+    background: theme.ColorRole,
+    border: theme.ColorRole,
+    border_edges: style.Edges,
+    interactive: bool,
+    radius: style.CornerRadii,
+) void {
     if (ui.nodeStyle(id)) |current| {
         var next = current;
         next.width = .{ .px = @max(0, rect.w) };
@@ -37,8 +61,9 @@ pub fn setPanelStyled(
         next.margin = style.Edges{ .left = rect.x - origin.x, .top = rect.y - origin.y };
         next.background = ui.theme.color(background);
         next.border_color = ui.theme.color(border);
-        next.border_width = border_width;
-        next.radius = style.CornerRadii.all(radius);
+        next.border_width = 0;
+        next.border_edges = border_edges;
+        next.radius = radius;
         next.direction = .absolute;
         const visible = rect.w > 0 and rect.h > 0;
         ui.setStyle(id, next) catch {};
@@ -93,7 +118,7 @@ pub fn setLabel(ui: *app.Ui, id: types.NodeId, bytes: []const u8, active: bool) 
         next.width = .fill;
         next.height = .fill;
         next.padding = .{ .left = 10, .right = 8, .top = 7, .bottom = 5 };
-        next.foreground = ui.theme.color(if (active) .text else .text_muted);
+        next.foreground = ui.theme.color(if (active) .text else .text_dim);
         next.font_size = ui.theme.font.small;
         ui.setStyle(id, next) catch {};
         ui.setVisible(id, true) catch {};

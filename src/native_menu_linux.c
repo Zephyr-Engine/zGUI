@@ -73,11 +73,17 @@ void *zgui_native_menu_create(uintptr_t child_xid, const char *title, size_t tit
     NativeMenu *native = calloc(1, sizeof(*native)); if (!native) return NULL;
     char *window_title = copy_string(title, title_len); if (!window_title) { free(native); return NULL; }
     native->window = gtk_window_new_fn(0);
-    GtkWidget *box = gtk_box_new_fn(1, 0), *bar = gtk_menu_bar_new_fn(), *header = gtk_header_bar_new_fn(), *socket = gtk_socket_new_fn();
+    GtkWidget *box = gtk_box_new_fn(1, 0), *bar = gtk_menu_bar_new_fn(), *socket = gtk_socket_new_fn();
     native->callback = callback; native->context = context;
     gtk_window_set_title_fn(native->window, window_title); free(window_title);
-    gtk_header_bar_set_show_close_button_fn(header, 1); gtk_header_bar_pack_start_fn(header, bar); gtk_window_set_titlebar_fn(native->window, header);
-    gtk_box_pack_start_fn(box, socket, 1, 1, 0); gtk_container_add_fn(native->window, box);
+    /* A menu bar packed into GtkHeaderBar can be temporarily allocated a
+       single pixel while the X11 child is being embedded. GTK then emits
+       negative-content-width and pixman invalid-rectangle diagnostics for
+       its labels. Keep normal menu/content geometry in one vertical box so
+       each child gets a valid allocation throughout realization and resize. */
+    gtk_box_pack_start_fn(box, bar, 0, 0, 0);
+    gtk_box_pack_start_fn(box, socket, 1, 1, 0);
+    gtk_container_add_fn(native->window, box);
     g_signal_connect_data_fn(native->window, "destroy", window_destroyed, native, NULL, 0);
     gtk_window_maximize_fn(native->window); gtk_widget_show_all_fn(native->window); gtk_socket_add_id_fn(socket, (unsigned long)child_xid);
     native->bar = bar;
@@ -87,12 +93,12 @@ void *zgui_native_menu_create(uintptr_t child_xid, const char *title, size_t tit
 void *zgui_native_menu_add_menu(void *handle, const char *label, size_t len) {
     NativeMenu *native = handle; if (!native) return NULL; GtkWidget *bar = native->bar;
     char *text = copy_string(label, len); if (!text) return NULL; GtkWidget *item = gtk_menu_item_new_with_label_fn(text); free(text);
-    GtkWidget *menu = gtk_menu_new_fn(); gtk_menu_item_set_submenu_fn(item, menu); gtk_menu_shell_append_fn(bar, item); gtk_widget_show_all_fn(item); return menu;
+    GtkWidget *menu = gtk_menu_new_fn(); gtk_menu_item_set_submenu_fn(item, menu); gtk_menu_shell_append_fn(bar, item); gtk_widget_show_all_fn(bar); return menu;
 }
 int zgui_native_menu_add_item(void *handle, void *menu, const char *label, size_t len, uint64_t id) {
     NativeMenu *native = handle; if (!native || !menu) return 0; char *text = copy_string(label, len); if (!text) return 0;
     GtkWidget *item = gtk_menu_item_new_with_label_fn(text); free(text); Action *action = malloc(sizeof(*action)); if (!action) return 0;
-    action->owner = native; action->id = id; action->next = NULL; g_signal_connect_data_fn(item, "activate", activate, action, NULL, 0); gtk_menu_shell_append_fn(menu, item); gtk_widget_show_all_fn(item); return 1;
+    action->owner = native; action->id = id; action->next = NULL; g_signal_connect_data_fn(item, "activate", activate, action, NULL, 0); gtk_menu_shell_append_fn(menu, item); gtk_widget_show_all_fn(menu); return 1;
 }
 void zgui_native_menu_poll(void *handle) { (void)handle; if (!loaded || !gtk_events_pending_fn) return; while (gtk_events_pending_fn()) gtk_main_iteration_do_fn(0); }
 int zgui_native_menu_content_width(void *handle) { NativeMenu *native = handle; return native && native->socket ? gtk_widget_get_allocated_width_fn(native->socket) : 0; }
