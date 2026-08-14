@@ -84,12 +84,16 @@ pub fn build(b: *std.Build) void {
     const run_mod_tests = b.addRunArtifact(mod_tests);
     const core_tests = b.addTest(.{ .root_module = core_mod });
     const run_core_tests = b.addRunArtifact(core_tests);
+    const native_menu_tests = b.addTest(.{ .root_module = native_menu_mod });
+    const run_native_menu_tests = b.addRunArtifact(native_menu_tests);
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_core_tests.step);
+    test_step.dependOn(&run_native_menu_tests.step);
 
     const check_step = b.step("check", "Compile the library, demo, and tests");
     check_step.dependOn(&demo.step);
     check_step.dependOn(&mod_tests.step);
     check_step.dependOn(&core_tests.step);
+    check_step.dependOn(&native_menu_tests.step);
 }

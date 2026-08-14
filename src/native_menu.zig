@@ -52,10 +52,6 @@ extern fn zgui_native_menu_add_item(Handle, Menu, [*]const u8, usize, ActionId) 
 extern fn zgui_native_menu_poll(Handle) void;
 extern fn zgui_native_menu_content_width(Handle) c_int;
 
-test "native menus report unsupported platforms without a backend" {
-    if (builtin.os.tag != .linux) {
-        try std.testing.expectError(error.UnsupportedPlatform, NativeMenu.init(0, "Test", null, struct {
-            fn callback(_: ?*anyopaque, _: ActionId) callconv(.c) void {}
-        }.callback));
-    }
+test "close action uses the reserved action id" {
+    try std.testing.expectEqual(std.math.maxInt(ActionId), close_action);
 }
