@@ -20,6 +20,7 @@ pub const BeginFrame = struct {
     events: []const platform_events.PlatformEvent = &.{},
     window_size: types.Vec2,
     dt: f32 = 0,
+    clipboard: ?platform_events.Clipboard = null,
 };
 
 pub const UiStats = struct {
@@ -75,6 +76,7 @@ pub const Ui = struct {
     force_paint: bool = true,
     draw_generation: u32 = 0,
     scroll_animation_active: bool = false,
+    clipboard: ?platform_events.Clipboard = null,
 
     pub fn init(allocator: std.mem.Allocator) !Ui {
         var tree = tree_mod.UiTree.init(allocator);
@@ -110,6 +112,7 @@ pub const Ui = struct {
         self.dt = frame.dt;
         self.requested_cursor = .arrow;
         self.pointer_capture = false;
+        self.clipboard = frame.clipboard;
         self.input.beginFrame();
         self.frame_events.clearRetainingCapacity();
         for (frame.events) |event| {
@@ -325,6 +328,85 @@ pub const Ui = struct {
         return input_mod.mouseReleased(self.input, button);
     }
 
+    pub fn keyDown(self: *const Ui, key: platform_events.Key) bool {
+        return input_mod.keyDown(self.input, key);
+    }
+
+    pub fn keyPressed(self: *const Ui, key: platform_events.Key) bool {
+        return input_mod.keyPressed(self.input, key);
+    }
+
+    pub fn keyReleased(self: *const Ui, key: platform_events.Key) bool {
+        return input_mod.keyReleased(self.input, key);
+    }
+
+    pub fn textInput(self: *const Ui) []const u8 {
+        return self.input.text_input[0..self.input.text_input_len];
+    }
+
+    pub fn keyboardEvents(self: *const Ui) []const input_mod.OrderedEvent {
+        return self.input.orderedEvents();
+    }
+
+    pub fn shiftDown(self: *const Ui) bool {
+        return self.keyDown(.left_shift) or self.keyDown(.right_shift);
+    }
+
+    pub fn controlDown(self: *const Ui) bool {
+        return self.keyDown(.left_control) or self.keyDown(.right_control);
+    }
+
+    pub fn superDown(self: *const Ui) bool {
+        return self.keyDown(.left_super) or self.keyDown(.right_super);
+    }
+
+    pub fn altDown(self: *const Ui) bool {
+        return self.keyDown(.left_alt) or self.keyDown(.right_alt);
+    }
+
+    pub fn commandDown(self: *const Ui) bool {
+        return self.controlDown() or self.superDown();
+    }
+
+    pub fn textInputOverflowed(self: *const Ui) bool {
+        return self.input.text_overflowed;
+    }
+
+    pub fn requestFocus(self: *Ui, id: types.NodeId) void {
+        const next = self.tree.get(id) orelse return;
+        if (self.input.focused == id) return;
+        if (self.tree.get(self.input.focused)) |old| old.flags.focused = false;
+        dirty_mod.markPaintDirty(&self.tree, self.input.focused);
+        self.input.focused = id;
+        next.flags.focused = true;
+        dirty_mod.markPaintDirty(&self.tree, id);
+    }
+
+    pub fn clearFocus(self: *Ui) void {
+        if (self.tree.get(self.input.focused)) |old| old.flags.focused = false;
+        dirty_mod.markPaintDirty(&self.tree, self.input.focused);
+        self.input.focused = types.invalid_node;
+    }
+
+    pub fn focusedNode(self: *const Ui) types.NodeId {
+        return if (self.tree.getConst(self.input.focused) != null) self.input.focused else types.invalid_node;
+    }
+
+    pub fn isFocused(self: *const Ui, id: types.NodeId) bool {
+        return self.focusedNode() == id;
+    }
+
+    pub fn readClipboard(self: *const Ui) []const u8 {
+        const clipboard = self.clipboard orelse return "";
+        const value = clipboard.read();
+        return if (std.unicode.utf8ValidateSlice(value)) value else "";
+    }
+
+    pub fn writeClipboard(self: *const Ui, text: []const u8) void {
+        if (!std.unicode.utf8ValidateSlice(text)) return;
+        if (self.clipboard) |clipboard| clipboard.write(text);
+    }
+
     pub fn statsSnapshot(self: *const Ui) UiStats {
         return self.stats;
     }
@@ -342,13 +424,26 @@ pub const Ui = struct {
     }
 
     pub fn inputCapture(self: *const Ui) InputCapture {
+        const focused = if (self.tree.getConst(self.input.focused)) |node|
+            if (self.nodeEffectivelyVisible(self.input.focused)) node else null
+        else
+            null;
         return .{
             .wants_mouse = self.pointer_capture or self.input.hovered != types.invalid_node or self.input.active != types.invalid_node,
             .has_pointer_capture = self.pointer_capture or self.input.active != types.invalid_node,
-            .wants_keyboard = self.input.focused != types.invalid_node,
-            // zGUI does not yet have text-edit widgets that capture IME/text input.
-            .wants_text_input = false,
+            .wants_keyboard = focused != null,
+            .wants_text_input = if (focused) |node| node.flags.accepts_text_input else false,
         };
+    }
+
+    fn nodeEffectivelyVisible(self: *const Ui, id: types.NodeId) bool {
+        var current = id;
+        while (current != types.invalid_node) {
+            const node = self.tree.getConst(current) orelse return false;
+            if (!node.flags.visible) return false;
+            current = node.parent;
+        }
+        return true;
     }
 
     pub fn processPlatformEvent(self: *Ui, event: platform_events.PlatformEvent) !void {
@@ -671,6 +766,27 @@ test "pointer capture is explicit and resets at the next frame" {
 
     try ui_state.beginFrame(.{ .window_size = .{ .x = 100, .y = 100 } });
     try std.testing.expect(!ui_state.inputCapture().has_pointer_capture);
+}
+
+test "focused text capability controls capture and destruction clears it" {
+    var ui_state = try Ui.init(std.testing.allocator);
+    defer ui_state.deinit();
+    const button = try ui_state.createNode(.button);
+    try ui_state.tree.appendChild(ui_state.root, button);
+    ui_state.requestFocus(button);
+    try std.testing.expect(ui_state.inputCapture().wants_keyboard);
+    try std.testing.expect(!ui_state.inputCapture().wants_text_input);
+
+    const field = try ui_state.createNode(.panel);
+    const field_node = ui_state.tree.get(field).?;
+    field_node.flags.focusable = true;
+    field_node.flags.accepts_text_input = true;
+    try ui_state.tree.appendChild(ui_state.root, field);
+    ui_state.requestFocus(field);
+    try std.testing.expect(ui_state.inputCapture().wants_text_input);
+    ui_state.destroySubtree(field);
+    try std.testing.expectEqual(types.invalid_node, ui_state.focusedNode());
+    try std.testing.expect(!ui_state.inputCapture().wants_keyboard);
 }
 
 test "paint-only style changes do not dirty layout" {

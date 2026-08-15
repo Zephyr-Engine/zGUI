@@ -8,6 +8,12 @@ pub const image_mod = @import("image.zig");
 pub const primitives_mod = @import("primitives.zig");
 pub const virtual_list = @import("virtual_list.zig");
 pub const menu_mod = @import("menu.zig");
+pub const text_field = @import("text_field.zig");
+pub const checkbox = @import("checkbox.zig");
+pub const slider = @import("slider.zig");
+pub const numeric_field = @import("numeric_field.zig");
+pub const selection = @import("selection.zig");
+pub const modal = @import("modal.zig");
 pub const dock_space_mod = @import("../docking/dock_space.zig");
 
 pub const panel = panel_mod.panel;
@@ -38,6 +44,18 @@ pub const primaryButton = primitives_mod.primaryButton;
 pub const MenuBar = menu_mod.MenuBar;
 pub const Menu = menu_mod.Menu;
 pub const MenuOptions = menu_mod.MenuOptions;
+pub const TextField = text_field.TextField;
+pub const TextFieldOptions = text_field.Options;
+pub const TextFieldResult = text_field.TextFieldResult;
+pub const Checkbox = checkbox.Checkbox;
+pub const Slider = slider.Slider;
+pub const SliderOptions = slider.Options;
+pub const NumericField = numeric_field.NumericField;
+pub const NumericOptions = numeric_field.Options;
+pub const NumericResult = numeric_field.NumericResult;
+pub const commitFloat = numeric_field.commitFloat;
+pub const SelectionList = selection.SelectionList;
+pub const Modal = modal.Modal;
 pub const dockSpace = dock_space_mod.dockSpace;
 pub const CardOptions = primitives_mod.CardOptions;
 pub const PillOptions = primitives_mod.PillOptions;
@@ -46,3 +64,40 @@ pub const ButtonOptions = primitives_mod.ButtonOptions;
 pub const virtualListRange = virtual_list.visibleRange;
 pub const VirtualListOptions = virtual_list.Options;
 pub const VirtualListRange = virtual_list.Range;
+
+test "editable retained controls mount update and unmount headlessly" {
+    const std = @import("std");
+    const app = @import("../core/ui_context.zig");
+    var ui = try app.Ui.init(std.testing.allocator);
+    defer ui.deinit();
+
+    var check = try Checkbox.init(&ui, ui.rootNode(), "Enabled");
+    defer check.deinit(&ui);
+    var checked = false;
+    _ = try check.update(&ui, &checked);
+
+    var range = try Slider.init(&ui, ui.rootNode(), .{ .min = 0, .max = 10, .step = 1 });
+    defer range.deinit(&ui);
+    var slider_value: f32 = 4;
+    _ = try range.update(&ui, &slider_value, .{ .min = 0, .max = 10, .step = 1 });
+
+    var number = try NumericField.initF32(std.testing.allocator, &ui, ui.rootNode(), 2.5, .{ .min = 0, .max = 10 });
+    defer number.deinit(&ui);
+    var number_value: f32 = 2.5;
+    _ = try number.updateF32(&ui, &number_value, .{ .min = 0, .max = 10 });
+
+    const overlay = try surface(&ui, ui.rootNode(), .{ .width = .fill, .height = .fill, .direction = .absolute });
+    var list = try SelectionList.init(std.testing.allocator, &ui, overlay);
+    defer list.deinit(&ui);
+    try list.setItems(&ui, &.{ "One", "Two" });
+    try list.show(&ui, .{ .x = 10, .y = 10 });
+    _ = try list.update(&ui);
+
+    var dialog = try Modal.init(&ui);
+    defer dialog.deinit(&ui);
+    try dialog.show(&ui);
+    try dialog.update(&ui);
+    try std.testing.expect(ui.inputCapture().has_pointer_capture);
+    try std.testing.expect(ui.inputCapture().wants_keyboard);
+    try std.testing.expect(!ui.inputCapture().wants_text_input);
+}

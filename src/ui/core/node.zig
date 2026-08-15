@@ -26,6 +26,8 @@ pub const NodeFlags = packed struct {
     pressed: bool = false,
     focused: bool = false,
     clipped: bool = false,
+    focusable: bool = false,
+    accepts_text_input: bool = false,
 };
 
 pub const Node = struct {

@@ -146,6 +146,24 @@ pub const GlfwPlatform = struct {
         c.glfwSetClipboardString(self.window, @ptrCast(self.clipboard_buffer.items.ptr));
     }
 
+    pub fn clipboard(self: *GlfwPlatform) ui.Clipboard {
+        return .{
+            .context = self,
+            .read_fn = clipboardRead,
+            .write_fn = clipboardWrite,
+        };
+    }
+
+    fn clipboardRead(context: ?*anyopaque) []const u8 {
+        const self: *GlfwPlatform = @ptrCast(@alignCast(context orelse return ""));
+        return self.getClipboard();
+    }
+
+    fn clipboardWrite(context: ?*anyopaque, text: []const u8) void {
+        const self: *GlfwPlatform = @ptrCast(@alignCast(context orelse return));
+        self.setClipboard(text);
+    }
+
     pub fn swapBuffers(self: *GlfwPlatform) void {
         c.glfwSwapBuffers(self.window);
     }
@@ -215,7 +233,7 @@ pub const GlfwPlatform = struct {
         _ = mods;
         const self = fromWindow(window) orelse return;
         const mapped = mapKey(key);
-        if (action == c.GLFW_PRESS) {
+        if (action == c.GLFW_PRESS or action == c.GLFW_REPEAT) {
             self.appendEvent(.{ .key_down = mapped });
         } else if (action == c.GLFW_RELEASE) {
             self.appendEvent(.{ .key_up = mapped });
@@ -244,18 +262,126 @@ pub const GlfwPlatform = struct {
 
 fn mapKey(key: c_int) events.Key {
     return switch (key) {
+        c.GLFW_KEY_SPACE => .space,
+        c.GLFW_KEY_APOSTROPHE => .apostrophe,
+        c.GLFW_KEY_COMMA => .comma,
+        c.GLFW_KEY_MINUS => .minus,
+        c.GLFW_KEY_PERIOD => .period,
+        c.GLFW_KEY_SLASH => .slash,
+        c.GLFW_KEY_0 => .num_0,
+        c.GLFW_KEY_1 => .num_1,
+        c.GLFW_KEY_2 => .num_2,
+        c.GLFW_KEY_3 => .num_3,
+        c.GLFW_KEY_4 => .num_4,
+        c.GLFW_KEY_5 => .num_5,
+        c.GLFW_KEY_6 => .num_6,
+        c.GLFW_KEY_7 => .num_7,
+        c.GLFW_KEY_8 => .num_8,
+        c.GLFW_KEY_9 => .num_9,
+        c.GLFW_KEY_SEMICOLON => .semicolon,
+        c.GLFW_KEY_EQUAL => .equal,
+        c.GLFW_KEY_A => .a,
+        c.GLFW_KEY_B => .b,
+        c.GLFW_KEY_C => .c,
+        c.GLFW_KEY_D => .d,
+        c.GLFW_KEY_E => .e,
+        c.GLFW_KEY_F => .f,
+        c.GLFW_KEY_G => .g,
+        c.GLFW_KEY_H => .h,
+        c.GLFW_KEY_I => .i,
+        c.GLFW_KEY_J => .j,
+        c.GLFW_KEY_K => .k,
+        c.GLFW_KEY_L => .l,
+        c.GLFW_KEY_M => .m,
+        c.GLFW_KEY_N => .n,
+        c.GLFW_KEY_O => .o,
+        c.GLFW_KEY_P => .p,
+        c.GLFW_KEY_Q => .q,
+        c.GLFW_KEY_R => .r,
+        c.GLFW_KEY_S => .s,
+        c.GLFW_KEY_T => .t,
+        c.GLFW_KEY_U => .u,
+        c.GLFW_KEY_V => .v,
+        c.GLFW_KEY_W => .w,
+        c.GLFW_KEY_X => .x,
+        c.GLFW_KEY_Y => .y,
+        c.GLFW_KEY_Z => .z,
+        c.GLFW_KEY_LEFT_BRACKET => .left_bracket,
+        c.GLFW_KEY_BACKSLASH => .backslash,
+        c.GLFW_KEY_RIGHT_BRACKET => .right_bracket,
+        c.GLFW_KEY_GRAVE_ACCENT => .grave_accent,
+        c.GLFW_KEY_WORLD_1 => .world_1,
+        c.GLFW_KEY_WORLD_2 => .world_2,
         c.GLFW_KEY_ESCAPE => .escape,
         c.GLFW_KEY_ENTER => .enter,
         c.GLFW_KEY_TAB => .tab,
         c.GLFW_KEY_BACKSPACE => .backspace,
+        c.GLFW_KEY_INSERT => .insert,
         c.GLFW_KEY_DELETE => .delete,
         c.GLFW_KEY_LEFT => .left,
         c.GLFW_KEY_RIGHT => .right,
         c.GLFW_KEY_UP => .up,
         c.GLFW_KEY_DOWN => .down,
-        c.GLFW_KEY_A => .a,
-        c.GLFW_KEY_B => .b,
-        c.GLFW_KEY_C => .c,
+        c.GLFW_KEY_PAGE_UP => .page_up,
+        c.GLFW_KEY_PAGE_DOWN => .page_down,
+        c.GLFW_KEY_HOME => .home,
+        c.GLFW_KEY_END => .end,
+        c.GLFW_KEY_CAPS_LOCK => .caps_lock,
+        c.GLFW_KEY_SCROLL_LOCK => .scroll_lock,
+        c.GLFW_KEY_NUM_LOCK => .num_lock,
+        c.GLFW_KEY_PRINT_SCREEN => .print_screen,
+        c.GLFW_KEY_PAUSE => .pause,
+        c.GLFW_KEY_F1 => .f1,
+        c.GLFW_KEY_F2 => .f2,
+        c.GLFW_KEY_F3 => .f3,
+        c.GLFW_KEY_F4 => .f4,
+        c.GLFW_KEY_F5 => .f5,
+        c.GLFW_KEY_F6 => .f6,
+        c.GLFW_KEY_F7 => .f7,
+        c.GLFW_KEY_F8 => .f8,
+        c.GLFW_KEY_F9 => .f9,
+        c.GLFW_KEY_F10 => .f10,
+        c.GLFW_KEY_F11 => .f11,
+        c.GLFW_KEY_F12 => .f12,
+        c.GLFW_KEY_F13 => .f13,
+        c.GLFW_KEY_F14 => .f14,
+        c.GLFW_KEY_F15 => .f15,
+        c.GLFW_KEY_F16 => .f16,
+        c.GLFW_KEY_F17 => .f17,
+        c.GLFW_KEY_F18 => .f18,
+        c.GLFW_KEY_F19 => .f19,
+        c.GLFW_KEY_F20 => .f20,
+        c.GLFW_KEY_F21 => .f21,
+        c.GLFW_KEY_F22 => .f22,
+        c.GLFW_KEY_F23 => .f23,
+        c.GLFW_KEY_F24 => .f24,
+        c.GLFW_KEY_F25 => .f25,
+        c.GLFW_KEY_KP_0 => .kp_0,
+        c.GLFW_KEY_KP_1 => .kp_1,
+        c.GLFW_KEY_KP_2 => .kp_2,
+        c.GLFW_KEY_KP_3 => .kp_3,
+        c.GLFW_KEY_KP_4 => .kp_4,
+        c.GLFW_KEY_KP_5 => .kp_5,
+        c.GLFW_KEY_KP_6 => .kp_6,
+        c.GLFW_KEY_KP_7 => .kp_7,
+        c.GLFW_KEY_KP_8 => .kp_8,
+        c.GLFW_KEY_KP_9 => .kp_9,
+        c.GLFW_KEY_KP_DECIMAL => .kp_decimal,
+        c.GLFW_KEY_KP_DIVIDE => .kp_divide,
+        c.GLFW_KEY_KP_MULTIPLY => .kp_multiply,
+        c.GLFW_KEY_KP_SUBTRACT => .kp_subtract,
+        c.GLFW_KEY_KP_ADD => .kp_add,
+        c.GLFW_KEY_KP_ENTER => .kp_enter,
+        c.GLFW_KEY_KP_EQUAL => .kp_equal,
+        c.GLFW_KEY_LEFT_SHIFT => .left_shift,
+        c.GLFW_KEY_LEFT_CONTROL => .left_control,
+        c.GLFW_KEY_LEFT_ALT => .left_alt,
+        c.GLFW_KEY_LEFT_SUPER => .left_super,
+        c.GLFW_KEY_RIGHT_SHIFT => .right_shift,
+        c.GLFW_KEY_RIGHT_CONTROL => .right_control,
+        c.GLFW_KEY_RIGHT_ALT => .right_alt,
+        c.GLFW_KEY_RIGHT_SUPER => .right_super,
+        c.GLFW_KEY_MENU => .menu,
         else => .unknown,
     };
 }

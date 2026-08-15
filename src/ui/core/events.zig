@@ -5,6 +5,7 @@ pub const PlatformEvent = platform_events.PlatformEvent;
 pub const MouseButton = platform_events.MouseButton;
 pub const Key = platform_events.Key;
 pub const CursorKind = platform_events.CursorKind;
+pub const Clipboard = platform_events.Clipboard;
 
 pub const PointerActivation = struct {
     button: MouseButton,

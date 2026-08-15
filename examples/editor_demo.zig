@@ -198,6 +198,7 @@ pub fn main(init: std.process.Init) !void {
             .events = platform_events,
             .window_size = size,
             .dt = 1.0 / 60.0,
+            .clipboard = platform.clipboard(),
         });
 
         demo.layoutDock(size);
