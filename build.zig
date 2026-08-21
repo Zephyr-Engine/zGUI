@@ -77,6 +77,22 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the editor demo");
     run_step.dependOn(&run_demo.step);
 
+    const perf = b.addExecutable(.{
+        .name = "zgui_perf",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/ui_perf.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{.{ .name = "zGUI", .module = mod }},
+        }),
+    });
+    perf.root_module.addAnonymousImport("benchmark_font", .{
+        .root_source_file = b.path("assets/fonts/Inter-Regular.ttf"),
+    });
+    const run_perf = b.addRunArtifact(perf);
+    const perf_step = b.step("perf", "Run headless zGUI performance benchmarks");
+    perf_step.dependOn(&run_perf.step);
+
     const mod_tests = b.addTest(.{
         .root_module = mod,
     });

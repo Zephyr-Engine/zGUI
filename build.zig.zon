@@ -18,6 +18,7 @@
         "build.zig.zon",
         "src",
         "examples",
+        "benchmarks",
         "assets",
         "third_party",
         "LICENSE",

@@ -10,8 +10,12 @@ pub const DockManager = struct {
     // Slots vacated by collapsed splits are reused with a new generation so
     // the array stays bounded without allowing stale IDs to alias new nodes.
     free_list: std.ArrayList(u32) = .empty,
+    window_leaves: std.AutoHashMap(types.WindowId, types.DockNodeId),
     root: types.DockNodeId = types.invalid_dock_node,
     active_resize: ?ResizeState = null,
+    layout_dirty: bool = true,
+    last_layout_rect: ?types.Rect = null,
+    revision: u32 = 1,
 
     pub const SplitResult = struct {
         split: types.DockNodeId,
@@ -26,12 +30,16 @@ pub const DockManager = struct {
     };
 
     pub fn init(allocator: std.mem.Allocator) !DockManager {
-        var self: DockManager = .{ .allocator = allocator };
+        var self: DockManager = .{
+            .allocator = allocator,
+            .window_leaves = std.AutoHashMap(types.WindowId, types.DockNodeId).init(allocator),
+        };
         self.root = try self.appendNode(.{ .leaf = .{} });
         return self;
     }
 
     pub fn deinit(self: *DockManager) void {
+        self.window_leaves.deinit();
         for (self.nodes.items, self.alive.items) |*node, alive| {
             if (alive) node.deinit(self.allocator);
         }
@@ -48,6 +56,7 @@ pub const DockManager = struct {
         target: types.DockNodeId,
         position: dock_node.DockPosition,
     ) !void {
+        try self.window_leaves.ensureTotalCapacity(self.window_leaves.count() + 1);
         const target_node = self.resolveNode(target) orelse return error.InvalidDockTarget;
         try self.removeWindow(window, false);
 
@@ -56,10 +65,12 @@ pub const DockManager = struct {
                 .leaf => |*leaf| {
                     try leaf.tabs.append(self.allocator, window);
                     leaf.active_tab = leaf.tabs.items.len - 1;
+                    self.window_leaves.putAssumeCapacity(window, target);
                 },
                 .split => return error.InvalidDockTarget,
             }
             self.cleanupEmptyLeaves();
+            self.revision +%= 1;
             return;
         }
 
@@ -68,23 +79,28 @@ pub const DockManager = struct {
             .leaf => |*leaf| {
                 try leaf.tabs.append(self.allocator, window);
                 leaf.active_tab = leaf.tabs.items.len - 1;
+                self.window_leaves.putAssumeCapacity(window, result.new_leaf);
             },
             .split => unreachable,
         }
         self.cleanupEmptyLeaves();
+        self.revision +%= 1;
     }
 
     pub fn moveWindowToLeaf(self: *DockManager, window: types.WindowId, target: types.DockNodeId) !void {
+        try self.window_leaves.ensureTotalCapacity(self.window_leaves.count() + 1);
         _ = self.resolveNode(target) orelse return error.InvalidDockTarget;
         try self.removeWindow(window, false);
         switch (self.resolveNode(target).?.*) {
             .leaf => |*leaf| {
                 try leaf.tabs.append(self.allocator, window);
                 leaf.active_tab = leaf.tabs.items.len - 1;
+                self.window_leaves.putAssumeCapacity(window, target);
             },
             .split => return error.InvalidDockTarget,
         }
         self.cleanupEmptyLeaves();
+        self.revision +%= 1;
     }
 
     pub fn splitNode(
@@ -100,6 +116,10 @@ pub const DockManager = struct {
         const new_id = try self.appendNode(.{ .leaf = .{} });
         errdefer self.releaseSubtree(new_id);
         const old_id = try self.appendNode(old);
+        switch (old) {
+            .leaf => |leaf| for (leaf.tabs.items) |window| self.window_leaves.putAssumeCapacity(window, old_id),
+            .split => {},
+        }
         const axis: dock_node.Axis = switch (position) {
             .left, .right => .x,
             .top, .bottom => .y,
@@ -119,6 +139,8 @@ pub const DockManager = struct {
             .first = first,
             .second = second,
         } };
+        self.layout_dirty = true;
+        self.revision +%= 1;
 
         return .{
             .split = target,
@@ -132,39 +154,33 @@ pub const DockManager = struct {
     }
 
     fn removeWindow(self: *DockManager, window: types.WindowId, cleanup: bool) !void {
-        for (self.nodes.items, self.alive.items) |*node, alive| {
-            if (!alive) continue;
-            switch (node.*) {
-                .leaf => |*leaf| {
-                    for (leaf.tabs.items, 0..) |tab, i| {
-                        if (tab == window) {
-                            _ = leaf.tabs.orderedRemove(i);
-                            if (leaf.active_tab >= leaf.tabs.items.len) {
-                                leaf.active_tab = if (leaf.tabs.items.len == 0) 0 else leaf.tabs.items.len - 1;
-                            }
-                            if (cleanup) self.cleanupEmptyLeaves();
-                            return;
-                        }
+        const leaf_id = self.window_leaves.get(window) orelse return;
+        const node = self.resolveNode(leaf_id) orelse {
+            _ = self.window_leaves.remove(window);
+            return;
+        };
+        switch (node.*) {
+            .leaf => |*leaf| {
+                for (leaf.tabs.items, 0..) |tab, i| {
+                    if (tab != window) continue;
+                    _ = leaf.tabs.orderedRemove(i);
+                    _ = self.window_leaves.remove(window);
+                    if (leaf.active_tab >= leaf.tabs.items.len) {
+                        leaf.active_tab = if (leaf.tabs.items.len == 0) 0 else leaf.tabs.items.len - 1;
                     }
-                },
-                .split => {},
-            }
+                    if (cleanup) self.cleanupEmptyLeaves();
+                    self.revision +%= 1;
+                    return;
+                }
+            },
+            .split => {},
         }
+        _ = self.window_leaves.remove(window);
     }
 
     pub fn leafForWindow(self: *const DockManager, window: types.WindowId) ?types.DockNodeId {
-        for (self.nodes.items, self.alive.items, 0..) |node, alive, i| {
-            if (!alive) continue;
-            switch (node) {
-                .leaf => |leaf| {
-                    for (leaf.tabs.items) |tab| {
-                        if (tab == window) return self.idForSlot(i);
-                    }
-                },
-                .split => {},
-            }
-        }
-        return null;
+        const leaf = self.window_leaves.get(window) orelse return null;
+        return if (self.resolveNodeConst(leaf) != null) leaf else null;
     }
 
     pub fn activeWindow(self: *const DockManager, leaf_id: types.DockNodeId) ?types.WindowId {
@@ -192,7 +208,12 @@ pub const DockManager = struct {
     }
 
     pub fn layout(self: *DockManager, available: types.Rect) void {
+        if (!self.layout_dirty) {
+            if (self.last_layout_rect) |last| if (std.meta.eql(last, available)) return;
+        }
         self.layoutNode(self.root, available);
+        self.last_layout_rect = available;
+        self.layout_dirty = false;
     }
 
     pub fn setSplitMinimums(self: *DockManager, split_id: types.DockNodeId, min_first_size: f32, min_second_size: f32) !void {
@@ -200,6 +221,7 @@ pub const DockManager = struct {
         split.min_first_size = @max(0, min_first_size);
         split.min_second_size = @max(0, min_second_size);
         split.ratio = clampRatio(split.*, split.ratio, split.rect);
+        self.layout_dirty = true;
     }
 
     pub fn splitRatio(self: *const DockManager, split_id: types.DockNodeId) ?f32 {
@@ -246,6 +268,7 @@ pub const DockManager = struct {
         const next_ratio = clampRatio(split.*, resize.start_ratio + delta / major, split.rect);
         const changed = @abs(split.ratio - next_ratio) > 0.0001;
         split.ratio = next_ratio;
+        if (changed) self.layout_dirty = true;
         return changed;
     }
 
@@ -316,7 +339,10 @@ pub const DockManager = struct {
     fn releaseSubtree(self: *DockManager, id: types.DockNodeId) void {
         const index = self.slotIndex(id) orelse return;
         switch (self.nodes.items[index]) {
-            .leaf => |*leaf| leaf.tabs.deinit(self.allocator),
+            .leaf => |*leaf| {
+                for (leaf.tabs.items) |window| _ = self.window_leaves.remove(window);
+                leaf.tabs.deinit(self.allocator);
+            },
             .split => |split| {
                 self.releaseSubtree(split.first);
                 self.releaseSubtree(split.second);
@@ -370,6 +396,7 @@ pub const DockManager = struct {
 
     fn cleanupEmptyLeaves(self: *DockManager) void {
         _ = self.collapseEmptyChild(self.root);
+        self.layout_dirty = true;
     }
 
     fn collapseEmptyChild(self: *DockManager, id: types.DockNodeId) bool {
@@ -400,6 +427,10 @@ pub const DockManager = struct {
         const moved = self.nodes.items[src_index];
         self.nodes.items[src_index] = .{ .leaf = .{} };
         self.nodes.items[dst_index] = moved;
+        switch (moved) {
+            .leaf => |leaf| for (leaf.tabs.items) |window| self.window_leaves.put(window, dst) catch {},
+            .split => {},
+        }
         self.alive.items[src_index] = false;
         // The src slot's content now lives at dst; recycle the vacated slot.
         self.free_list.append(self.allocator, src_index) catch {};

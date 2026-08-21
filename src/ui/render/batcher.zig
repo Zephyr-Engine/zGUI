@@ -6,7 +6,6 @@ const paint = @import("../core/paint.zig");
 const draw_data = @import("draw_data.zig");
 const font_atlas_mod = @import("font_atlas.zig");
 
-const white_texture: types.TextureHandle = .none;
 const default_clip: types.Rect = .{ .x = 0, .y = 0, .w = 100000, .h = 100000 };
 const max_corner_segments: usize = 10;
 const rounded_point_count: usize = 4 * (max_corner_segments + 1);
@@ -14,21 +13,66 @@ const max_antialias_width: f32 = 1;
 
 const CornerSegments = [4]usize;
 
+const unit_arc_table = blk: {
+    var table: [max_corner_segments + 1][4][max_corner_segments + 1]types.Vec2 = @splat(@splat(@splat(.{})));
+    const quarter_turn = std.math.pi * 0.5;
+    const starts = [_]f32{ -quarter_turn, 0, quarter_turn, std.math.pi };
+    var count: usize = 1;
+    while (count <= max_corner_segments) : (count += 1) {
+        var corner: usize = 0;
+        while (corner < 4) : (corner += 1) {
+            var segment: usize = 0;
+            while (segment <= count) : (segment += 1) {
+                const progress = @as(f32, @floatFromInt(segment)) / @as(f32, @floatFromInt(count));
+                const angle = starts[corner] + quarter_turn * progress;
+                table[count][corner][segment] = .{ .x = @cos(angle), .y = @sin(angle) };
+            }
+        }
+    }
+    break :blk table;
+};
+
 pub const FontAtlas = font_atlas_mod.FontAtlas;
 
 pub const Batcher = struct {
+    const PositionedGlyph = struct {
+        rect: types.Rect,
+        glyph: font_atlas_mod.Glyph,
+    };
+
+    const TextRunCache = struct {
+        node: types.NodeId = types.invalid_node,
+        revision: u32 = 0,
+        size: f32 = 0,
+        raster_scale: f32 = 0,
+        atlas: ?*FontAtlas = null,
+        text_hash: u64 = 0,
+        glyphs: std.ArrayList(PositionedGlyph) = .empty,
+
+        fn deinit(self: *TextRunCache, allocator: std.mem.Allocator) void {
+            self.glyphs.deinit(allocator);
+        }
+    };
+
     allocator: std.mem.Allocator,
     vertices: std.ArrayList(draw_data.Vertex) = .empty,
     indices: std.ArrayList(u32) = .empty,
     batches: std.ArrayList(draw_data.DrawBatch) = .empty,
     clip_stack: std.ArrayList(types.Rect) = .empty,
+    text_runs: std.ArrayList(TextRunCache) = .empty,
     antialias_width: f32 = max_antialias_width,
+    solid_texture: types.TextureHandle = .none,
+    solid_uv: types.Vec2 = .{},
+    shaped_glyph_count: u32 = 0,
+    reused_glyph_count: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator) Batcher {
         return .{ .allocator = allocator };
     }
 
     pub fn deinit(self: *Batcher) void {
+        for (self.text_runs.items) |*run| run.deinit(self.allocator);
+        self.text_runs.deinit(self.allocator);
         self.vertices.deinit(self.allocator);
         self.indices.deinit(self.allocator);
         self.batches.deinit(self.allocator);
@@ -46,6 +90,20 @@ pub const Batcher = struct {
     pub fn build(self: *Batcher, commands: []const paint.PaintCommand, font_atlas: ?*FontAtlas, text_raster_scale: f32) !draw_data.DrawData {
         self.clearRetainingCapacity();
         self.antialias_width = antialiasWidth(text_raster_scale);
+        self.shaped_glyph_count = 0;
+        self.reused_glyph_count = 0;
+        if (font_atlas) |atlas| {
+            if (atlas.texture.isValid()) {
+                self.solid_texture = atlas.texture;
+                self.solid_uv = atlas.whiteUv();
+            } else {
+                self.solid_texture = .none;
+                self.solid_uv = .{};
+            }
+        } else {
+            self.solid_texture = .none;
+            self.solid_uv = .{};
+        }
 
         for (commands) |command| {
             switch (command) {
@@ -74,10 +132,10 @@ pub const Batcher = struct {
         if (hasRoundedCorner(rect, radius)) {
             try self.addRoundedTexturedRect(
                 rect,
-                .{ .x = 0, .y = 0 },
-                .{ .x = 1, .y = 1 },
+                self.solid_uv,
+                self.solid_uv,
                 color,
-                white_texture,
+                self.solid_texture,
                 radius,
             );
             return;
@@ -85,10 +143,10 @@ pub const Batcher = struct {
 
         try self.addTexturedRect(
             rect,
-            .{ .x = 0, .y = 0 },
-            .{ .x = 1, .y = 1 },
+            self.solid_uv,
+            self.solid_uv,
             color,
-            white_texture,
+            self.solid_texture,
         );
     }
 
@@ -134,10 +192,10 @@ pub const Batcher = struct {
         if (inner.isEmpty()) {
             try self.addRoundedTexturedRect(
                 outer,
-                .{ .x = 0, .y = 0 },
-                .{ .x = 1, .y = 1 },
+                self.solid_uv,
+                self.solid_uv,
                 border.color,
-                white_texture,
+                self.solid_texture,
                 border.radius,
             );
             return;
@@ -150,15 +208,15 @@ pub const Batcher = struct {
         const inner_count = roundedRectPoints(inner, insetRadii(border.radius, border_width), segments, &inner_points);
         if (outer_count < 3 or inner_count != outer_count) return;
 
-        try self.ensureBatch(white_texture, self.currentClip());
+        try self.ensureBatch(self.solid_texture, self.currentClip());
         const color = border.color.toU32();
         const base: u32 = @intCast(self.vertices.items.len);
         try self.vertices.ensureUnusedCapacity(self.allocator, outer_count + inner_count);
         for (outer_points[0..outer_count]) |point| {
-            self.vertices.appendAssumeCapacity(.{ .pos = .{ point.x, point.y }, .uv = .{ 0, 0 }, .color = color });
+            self.vertices.appendAssumeCapacity(.{ .pos = .{ point.x, point.y }, .uv = .{ self.solid_uv.x, self.solid_uv.y }, .color = color });
         }
         for (inner_points[0..inner_count]) |point| {
-            self.vertices.appendAssumeCapacity(.{ .pos = .{ point.x, point.y }, .uv = .{ 0, 0 }, .color = color });
+            self.vertices.appendAssumeCapacity(.{ .pos = .{ point.x, point.y }, .uv = .{ self.solid_uv.x, self.solid_uv.y }, .color = color });
         }
 
         try self.indices.ensureUnusedCapacity(self.allocator, outer_count * 6);
@@ -183,9 +241,9 @@ pub const Batcher = struct {
             if (fringe_count == outer_count) {
                 try self.addTexturedRing(
                     outer,
-                    .{ .x = 0, .y = 0 },
-                    .{ .x = 1, .y = 1 },
-                    white_texture,
+                    self.solid_uv,
+                    self.solid_uv,
+                    self.solid_texture,
                     outer_points[0..outer_count],
                     fringe_points[0..fringe_count],
                     border.color,
@@ -199,11 +257,52 @@ pub const Batcher = struct {
         if (text.color.a == 0 or text.size <= 0) return;
 
         const raster_scale = sanitizeRasterScale(text_raster_scale);
-        const origin_x = text.pos.x;
-        var x = origin_x;
-        var baseline_y = text.pos.y;
+        const run = try self.textRun(text, atlas, raster_scale);
+        if (run.glyphs.items.len == 0) return;
+        try self.ensureBatch(atlas.texture, self.currentClip());
+        for (run.glyphs.items) |positioned| {
+            try self.addGlyphQuadToCurrentBatch(.{
+                .x = text.pos.x + positioned.rect.x,
+                .y = text.pos.y + positioned.rect.y,
+                .w = positioned.rect.w,
+                .h = positioned.rect.h,
+            }, positioned.glyph, text.color);
+        }
+    }
+
+    fn textRun(self: *Batcher, text: paint.TextPaint, atlas: *FontAtlas, raster_scale: f32) !*TextRunCache {
+        const index = types.nodeIndex(text.source_node);
+        const text_hash = if (text.source_node == 0) std.hash.Wyhash.hash(0, text.text) else 0;
+        if (index >= self.text_runs.items.len) {
+            const old_len = self.text_runs.items.len;
+            try self.text_runs.resize(self.allocator, index + 1);
+            @memset(self.text_runs.items[old_len..], .{});
+        }
+        const run = &self.text_runs.items[index];
+        if (run.node == text.source_node and run.revision == text.text_revision and
+            run.size == text.size and run.raster_scale == raster_scale and run.atlas == atlas and
+            run.text_hash == text_hash)
+        {
+            self.reused_glyph_count += @intCast(run.glyphs.items.len);
+            return run;
+        }
+
+        run.node = text.source_node;
+        run.revision = text.text_revision;
+        run.size = text.size;
+        run.raster_scale = raster_scale;
+        run.atlas = atlas;
+        run.text_hash = text_hash;
+        run.glyphs.clearRetainingCapacity();
+        try self.shapeTextRun(run, text, atlas, raster_scale);
+        self.shaped_glyph_count += @intCast(run.glyphs.items.len);
+        return run;
+    }
+
+    fn shapeTextRun(self: *Batcher, run: *TextRunCache, text: paint.TextPaint, atlas: *FontAtlas, raster_scale: f32) !void {
+        var x: f32 = 0;
+        var baseline_y: f32 = 0;
         var previous: ?u21 = null;
-        var text_batch_started = false;
         const line_height = atlas.lineHeightScaled(text.size, raster_scale);
         const space_advance = atlas.spaceAdvanceScaled(text.size, raster_scale);
         var it = text_mod.Utf8Iterator.init(text.text);
@@ -211,7 +310,7 @@ pub const Batcher = struct {
         while (it.next()) |codepoint| {
             switch (codepoint) {
                 '\n' => {
-                    x = origin_x;
+                    x = 0;
                     baseline_y += line_height;
                     previous = null;
                 },
@@ -228,19 +327,12 @@ pub const Batcher = struct {
                     if (previous) |left| x += atlas.kerningScaled(left, glyph.codepoint, text.size, raster_scale);
 
                     if (glyph.size.x > 0 and glyph.size.y > 0) {
-                        // A text command uses one texture and one clip. Set
-                        // up (or reuse) its batch once, then append glyphs
-                        // directly instead of rechecking batch state per quad.
-                        if (!text_batch_started) {
-                            try self.ensureBatch(atlas.texture, self.currentClip());
-                            text_batch_started = true;
-                        }
-                        try self.addGlyphQuadToCurrentBatch(.{
+                        try run.glyphs.append(self.allocator, .{ .rect = .{
                             .x = snapToRasterPixel(x + glyph.offset.x, raster_scale),
                             .y = snapToRasterPixel(baseline_y + glyph.offset.y, raster_scale),
                             .w = glyph.size.x,
                             .h = glyph.size.y,
-                        }, glyph, text.color);
+                        }, .glyph = glyph });
                     }
 
                     x += glyph.advance;
@@ -567,8 +659,6 @@ fn segmentsForRadius(radius: f32) usize {
 
 fn roundedRectPoints(rect: types.Rect, radius: style_mod.CornerRadii, segments: CornerSegments, points: *[rounded_point_count]types.Vec2) usize {
     const r = clampedRadii(rect, radius);
-    const pi = std.math.pi;
-    const quarter_turn = pi * 0.5;
     const centers = [_]types.Vec2{
         .{ .x = rect.x + rect.w - r.top_right, .y = rect.y + r.top_right },
         .{ .x = rect.x + rect.w - r.bottom_right, .y = rect.y + rect.h - r.bottom_right },
@@ -576,7 +666,6 @@ fn roundedRectPoints(rect: types.Rect, radius: style_mod.CornerRadii, segments: 
         .{ .x = rect.x + r.top_left, .y = rect.y + r.top_left },
     };
     const radii = [_]f32{ r.top_right, r.bottom_right, r.bottom_left, r.top_left };
-    const starts = [_]f32{ -quarter_turn, 0, quarter_turn, pi };
 
     var count: usize = 0;
     var corner: usize = 0;
@@ -585,11 +674,10 @@ fn roundedRectPoints(rect: types.Rect, radius: style_mod.CornerRadii, segments: 
         const corner_segments = segments[corner];
         var segment: usize = 0;
         while (segment <= corner_segments) : (segment += 1) {
-            const progress = @as(f32, @floatFromInt(segment)) / @as(f32, @floatFromInt(corner_segments));
-            const angle = starts[corner] + quarter_turn * progress;
+            const unit = unit_arc_table[corner_segments][corner][segment];
             points[count] = .{
-                .x = centers[corner].x + @cos(angle) * corner_radius,
-                .y = centers[corner].y + @sin(angle) * corner_radius,
+                .x = centers[corner].x + unit.x * corner_radius,
+                .y = centers[corner].y + unit.y * corner_radius,
             };
             count += 1;
         }
@@ -721,4 +809,29 @@ test "text commands emit atlas glyph quads" {
     try std.testing.expectEqual(@as(usize, 1), data.batches.len);
     try std.testing.expectEqual(types.TextureHandle.fromParts(41, 0), data.batches[0].texture);
     try std.testing.expect(data.vertices[0].uv[0] > 0);
+    try std.testing.expectEqual(@as(u32, 2), batcher.shaped_glyph_count);
+
+    const cached = try batcher.build(&commands, &atlas, 1);
+    try std.testing.expectEqual(@as(usize, 8), cached.vertices.len);
+    try std.testing.expectEqual(@as(u32, 0), batcher.shaped_glyph_count);
+    try std.testing.expectEqual(@as(u32, 2), batcher.reused_glyph_count);
+}
+
+test "solid and text commands share the font atlas batch" {
+    const font_bytes = try loadTestFont(std.testing.allocator);
+    defer std.testing.allocator.free(font_bytes);
+
+    var atlas = try FontAtlas.init(std.testing.allocator, font_bytes, 256, 256);
+    defer atlas.deinit();
+    atlas.texture = .fromParts(7, 0);
+    var batcher = Batcher.init(std.testing.allocator);
+    defer batcher.deinit();
+
+    const data = try batcher.build(&.{
+        .{ .rect = .{ .rect = .{ .w = 100, .h = 30 }, .color = types.Color.rgba(10, 20, 30, 255) } },
+        .{ .text = .{ .pos = .{ .y = 16 }, .text = "Label", .size = 16, .color = types.Color.rgba(255, 255, 255, 255) } },
+    }, &atlas, 1);
+    try std.testing.expectEqual(@as(usize, 1), data.batches.len);
+    try std.testing.expectEqual(atlas.texture, data.batches[0].texture);
+    try std.testing.expectEqual(atlas.whiteUv().x, data.vertices[0].uv[0]);
 }

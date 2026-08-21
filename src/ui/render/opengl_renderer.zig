@@ -143,6 +143,7 @@ pub const OpenGlRenderer = struct {
             else
                 self.resolveTexture(batch.texture) orelse continue;
             const scissor = scissorRect(batch.clip_rect, self.logical_width, self.logical_height, self.framebuffer_width, self.framebuffer_height);
+            if (scissor.w == 0 or scissor.h == 0) continue;
             if (bound_scissor == null or !std.meta.eql(bound_scissor.?, scissor)) {
                 c.glScissor(scissor.x, scissor.y, scissor.w, scissor.h);
                 bound_scissor = scissor;
@@ -332,8 +333,10 @@ fn uploadVertexBuffer(buffer: c.GLuint, data: []const draw_data.Vertex, capacity
     c.glBindBuffer(c.GL_ARRAY_BUFFER, buffer);
     if (byte_len > capacity.*) {
         capacity.* = nextBufferCapacity(byte_len);
-        c.glBufferData(c.GL_ARRAY_BUFFER, @intCast(capacity.*), null, c.GL_STREAM_DRAW);
     }
+    // Orphan storage before writing so a changed frame never waits for the GPU
+    // to finish consuming the previous frame's buffer contents.
+    c.glBufferData(c.GL_ARRAY_BUFFER, @intCast(capacity.*), null, c.GL_STREAM_DRAW);
     c.glBufferSubData(c.GL_ARRAY_BUFFER, 0, @intCast(byte_len), data.ptr);
 }
 
@@ -342,8 +345,8 @@ fn uploadIndexBuffer(buffer: c.GLuint, data: []const u32, capacity: *usize) void
     c.glBindBuffer(c.GL_ELEMENT_ARRAY_BUFFER, buffer);
     if (byte_len > capacity.*) {
         capacity.* = nextBufferCapacity(byte_len);
-        c.glBufferData(c.GL_ELEMENT_ARRAY_BUFFER, @intCast(capacity.*), null, c.GL_STREAM_DRAW);
     }
+    c.glBufferData(c.GL_ELEMENT_ARRAY_BUFFER, @intCast(capacity.*), null, c.GL_STREAM_DRAW);
     c.glBufferSubData(c.GL_ELEMENT_ARRAY_BUFFER, 0, @intCast(byte_len), data.ptr);
 }
 

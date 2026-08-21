@@ -177,6 +177,7 @@ pub fn main(init: std.process.Init) !void {
 
     var font_atlas = try ui.FontAtlas.init(init.gpa, font_bytes, 1024, 1024);
     defer font_atlas.deinit();
+    try font_atlas.prewarmAscii(&.{ 14, 15, 16, 17, 18 }, @max(initial_content_scale.x, initial_content_scale.y));
     try gl.syncFontAtlas(&font_atlas);
 
     var state = try ui.Ui.init(init.gpa);

@@ -39,6 +39,24 @@ Compile the library, GLFW demo, and tests without running them:
 zig build check
 ```
 
+Run the headless performance scenarios in an optimized build:
+
+```sh
+zig build perf
+```
+
+## Performance instrumentation
+
+`Ui.statsSnapshot()` exposes layout, paint-culling, geometry, batching, and
+text-shaping counters for the most recently completed frame. These counters
+are useful for regression tests because they describe work performed without
+depending on machine-specific timings.
+
+Applications with a known UI font/size set can avoid first-use glyph stalls by
+calling `FontAtlas.prewarmAscii` or `FontAtlas.prewarmGlyphs`. Synchronize the
+atlas after `Ui.endFrame()` and before drawing; `endFrame` may rasterize a glyph
+that was not in the prewarmed set.
+
 ## Modules
 
 - `zGUI` is the supported UI, docking, and OpenGL renderer API.

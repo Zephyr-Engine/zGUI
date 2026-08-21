@@ -30,11 +30,14 @@ pub const TextFieldResult = struct {
 };
 
 pub const TextField = struct {
+    const CaretStop = struct { index: usize, x: f32 };
+
     allocator: std.mem.Allocator,
     buffer: std.ArrayListUnmanaged(u8) = .empty,
     original: std.ArrayListUnmanaged(u8) = .empty,
     scratch: std.ArrayListUnmanaged(u8) = .empty,
     candidate: std.ArrayListUnmanaged(u8) = .empty,
+    caret_stops: std.ArrayListUnmanaged(CaretStop) = .empty,
     cursor: usize = 0,
     selection_anchor: ?usize = null,
     horizontal_scroll: f32 = 0,
@@ -45,6 +48,10 @@ pub const TextField = struct {
     dirty: bool = false,
     focused_last_frame: bool = false,
     suppress_focus_loss_commit: bool = false,
+    text_revision: u32 = 1,
+    caret_revision: u32 = 0,
+    caret_font_size: f32 = -1,
+    caret_atlas: ?*anyopaque = null,
 
     pub fn init(allocator: std.mem.Allocator, ui: *app.Ui, parent: types.NodeId, options: Options) !TextField {
         var self = TextField{ .allocator = allocator };
@@ -111,6 +118,7 @@ pub const TextField = struct {
         self.original.deinit(self.allocator);
         self.scratch.deinit(self.allocator);
         self.candidate.deinit(self.allocator);
+        self.caret_stops.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -122,6 +130,7 @@ pub const TextField = struct {
         if (!std.unicode.utf8ValidateSlice(bytes) or bytes.len > max_bytes) return error.InvalidText;
         self.buffer.clearRetainingCapacity();
         try self.buffer.appendSlice(self.allocator, bytes);
+        self.text_revision +%= 1;
         self.cursor = bytes.len;
         self.selection_anchor = null;
         if (!ui.isFocused(self.root_node)) try self.snapshotOriginal();
@@ -275,6 +284,7 @@ pub const TextField = struct {
         std.mem.copyBackwards(u8, self.buffer.items[self.cursor + insert_len .. old_len + insert_len], self.buffer.items[self.cursor..old_len]);
         @memcpy(self.buffer.items[self.cursor .. self.cursor + insert_len], self.scratch.items[0..insert_len]);
         self.cursor += insert_len;
+        self.text_revision +%= 1;
         return true;
     }
 
@@ -312,6 +322,7 @@ pub const TextField = struct {
     fn eraseRange(self: *TextField, start: usize, end: usize) void {
         std.mem.copyForwards(u8, self.buffer.items[start .. self.buffer.items.len - (end - start)], self.buffer.items[end..]);
         self.buffer.items.len -= end - start;
+        self.text_revision +%= 1;
     }
 
     const Range = struct { start: usize, end: usize };
@@ -343,25 +354,72 @@ pub const TextField = struct {
     fn restoreOriginal(self: *TextField) !void {
         self.buffer.clearRetainingCapacity();
         try self.buffer.appendSlice(self.allocator, self.original.items);
+        self.text_revision +%= 1;
         self.cursor = self.buffer.items.len;
         self.selection_anchor = null;
     }
 
-    fn cursorAtX(self: *const TextField, ui: *app.Ui, pointer_x: f32) usize {
+    fn cursorAtX(self: *TextField, ui: *app.Ui, pointer_x: f32) usize {
         const bounds = ui.bounds(self.root_node) orelse return self.cursor;
         const x = pointer_x - bounds.x - 8 + self.horizontal_scroll;
-        var best: usize = 0;
-        var best_distance = @abs(x);
-        var index: usize = 0;
-        while (index < self.buffer.items.len) {
-            index = nextBoundary(self.buffer.items, index);
-            const distance = @abs(x - measure(ui, self.buffer.items[0..index], ui.theme.font.body));
+        self.ensureCaretStops(ui) catch return self.cursor;
+        var best = self.caret_stops.items[0].index;
+        var best_distance = @abs(x - self.caret_stops.items[0].x);
+        for (self.caret_stops.items[1..]) |stop| {
+            const distance = @abs(x - stop.x);
             if (distance < best_distance) {
-                best = index;
+                best = stop.index;
                 best_distance = distance;
             }
         }
         return best;
+    }
+
+    fn ensureCaretStops(self: *TextField, ui: *app.Ui) !void {
+        const atlas_ptr: ?*anyopaque = if (ui.font_atlas) |atlas| @ptrCast(atlas) else null;
+        const font_size = ui.theme.font.body;
+        if (self.caret_revision == self.text_revision and self.caret_font_size == font_size and self.caret_atlas == atlas_ptr) return;
+
+        self.caret_stops.clearRetainingCapacity();
+        try self.caret_stops.append(self.allocator, .{ .index = 0, .x = 0 });
+        var index: usize = 0;
+        var x: f32 = 0;
+        var previous: ?u21 = null;
+        while (index < self.buffer.items.len) {
+            const codepoint = text_mod.decodeNext(self.buffer.items, &index) orelse break;
+            switch (codepoint) {
+                '\n' => {
+                    x = 0;
+                    previous = null;
+                },
+                '\t' => {
+                    x += if (ui.font_atlas) |atlas| atlas.spaceAdvance(font_size) * 4 else font_size * 0.55 * 4;
+                    previous = null;
+                },
+                else => if (ui.font_atlas) |atlas| {
+                    const advance = atlas.textAdvance(previous, codepoint, font_size);
+                    x += advance.advance;
+                    previous = advance.codepoint;
+                } else {
+                    x += font_size * 0.55;
+                    previous = codepoint;
+                },
+            }
+            try self.caret_stops.append(self.allocator, .{ .index = index, .x = x });
+        }
+        self.caret_revision = self.text_revision;
+        self.caret_font_size = font_size;
+        self.caret_atlas = atlas_ptr;
+    }
+
+    fn xAtIndex(self: *TextField, ui: *app.Ui, target: usize) f32 {
+        self.ensureCaretStops(ui) catch return measure(ui, self.buffer.items[0..@min(target, self.buffer.items.len)], ui.theme.font.body);
+        var result: f32 = 0;
+        for (self.caret_stops.items) |stop| {
+            if (stop.index > target) break;
+            result = stop.x;
+        }
+        return result;
     }
 
     fn syncVisuals(self: *TextField, ui: *app.Ui, options: Options) !void {
@@ -381,7 +439,7 @@ pub const TextField = struct {
             dirty.markPaintDirty(&ui.tree, self.text_node);
         }
 
-        const caret_x = measure(ui, self.buffer.items[0..self.cursor], ui.theme.font.body);
+        const caret_x = if (focused or self.selectionRange() != null) self.xAtIndex(ui, self.cursor) else 0;
         const inner_width = @max(0, root.bounds.w - root.style.padding.horizontal());
         if (!focused) {
             // Display inactive values from the beginning. Keeping the caret at
@@ -434,8 +492,8 @@ pub const TextField = struct {
             }
         }
         if (self.selectionRange()) |range| {
-            const start_x = measure(ui, self.buffer.items[0..range.start], ui.theme.font.body);
-            const end_x = measure(ui, self.buffer.items[0..range.end], ui.theme.font.body);
+            const start_x = self.xAtIndex(ui, range.start);
+            const end_x = self.xAtIndex(ui, range.end);
             if (!selection.flags.visible) {
                 selection.flags.visible = true;
                 dirty.markPaintDirty(&ui.tree, self.selection_node);

@@ -181,15 +181,15 @@ fn pressPrimary(tree: *tree_mod.UiTree, input: *InputState) void {
     dirty.markPaintDirty(tree, input.active);
 }
 
-pub fn keyDown(input_state: InputState, key: events.Key) bool {
+pub fn keyDown(input_state: *const InputState, key: events.Key) bool {
     return input_state.key_down[keyIndex(key)];
 }
 
-pub fn keyPressed(input_state: InputState, key: events.Key) bool {
+pub fn keyPressed(input_state: *const InputState, key: events.Key) bool {
     return input_state.key_pressed[keyIndex(key)];
 }
 
-pub fn keyReleased(input_state: InputState, key: events.Key) bool {
+pub fn keyReleased(input_state: *const InputState, key: events.Key) bool {
     return input_state.key_released[keyIndex(key)];
 }
 
@@ -209,15 +209,15 @@ fn releasePrimary(tree: *tree_mod.UiTree, input: *InputState) ?types.NodeId {
     return activated;
 }
 
-pub fn mouseDown(input_state: InputState, button: events.MouseButton) bool {
+pub fn mouseDown(input_state: *const InputState, button: events.MouseButton) bool {
     return input_state.mouse_down[buttonIndex(button)];
 }
 
-pub fn mousePressed(input_state: InputState, button: events.MouseButton) bool {
+pub fn mousePressed(input_state: *const InputState, button: events.MouseButton) bool {
     return input_state.mouse_pressed[buttonIndex(button)];
 }
 
-pub fn mouseReleased(input_state: InputState, button: events.MouseButton) bool {
+pub fn mouseReleased(input_state: *const InputState, button: events.MouseButton) bool {
     return input_state.mouse_released[buttonIndex(button)];
 }
 
@@ -236,17 +236,17 @@ test "keyboard state uses press-or-repeat semantics and text is ordered" {
     applyEvent(&input, .{ .key_down = .v });
     applyEvent(&input, .{ .text_input = "é" });
     applyEvent(&input, .{ .key_down = .v });
-    try std.testing.expect(keyDown(input, .v));
-    try std.testing.expect(keyPressed(input, .v));
+    try std.testing.expect(keyDown(&input, .v));
+    try std.testing.expect(keyPressed(&input, .v));
     try std.testing.expectEqual(@as(usize, 4), input.ordered_events_len);
     try std.testing.expectEqualStrings("é", input.text_input[0..input.text_input_len]);
 
     input.beginFrame();
-    try std.testing.expect(keyDown(input, .v));
-    try std.testing.expect(!keyPressed(input, .v));
+    try std.testing.expect(keyDown(&input, .v));
+    try std.testing.expect(!keyPressed(&input, .v));
     applyEvent(&input, .{ .key_up = .v });
-    try std.testing.expect(!keyDown(input, .v));
-    try std.testing.expect(keyReleased(input, .v));
+    try std.testing.expect(!keyDown(&input, .v));
+    try std.testing.expect(keyReleased(&input, .v));
 }
 
 test "invalid and overflowing text input is not appended" {

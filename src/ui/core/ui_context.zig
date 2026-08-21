@@ -33,6 +33,16 @@ pub const UiStats = struct {
     index_count: u32 = 0,
     batch_count: u32 = 0,
     draw_call_count: u32 = 0,
+    layout_measured_count: u32 = 0,
+    layout_positioned_count: u32 = 0,
+    layout_skipped_subtree_count: u32 = 0,
+    hidden_layout_node_count: u32 = 0,
+    paint_visited_count: u32 = 0,
+    paint_culled_subtree_count: u32 = 0,
+    paint_culled_command_count: u32 = 0,
+    geometry_rebuild_count: u32 = 0,
+    shaped_glyph_count: u32 = 0,
+    reused_glyph_count: u32 = 0,
 };
 
 pub const InputCapture = struct {
@@ -54,6 +64,11 @@ const HandlerSlot = struct {
     activate: ?events_mod.EventHandler = null,
 };
 
+const ActivationSlot = struct {
+    node: types.NodeId = types.invalid_node,
+    count: u32 = 0,
+};
+
 pub const Ui = struct {
     allocator: std.mem.Allocator,
     tree: tree_mod.UiTree,
@@ -62,6 +77,8 @@ pub const Ui = struct {
     input: input_mod.InputState = .{},
     frame_events: std.ArrayList(events_mod.Event) = .empty,
     handlers: std.ArrayList(HandlerSlot) = .empty,
+    activation_slots: std.ArrayList(ActivationSlot) = .empty,
+    activation_touched: std.ArrayList(u32) = .empty,
     root: types.NodeId = types.invalid_node,
     window_size: types.Vec2 = .{},
     last_window_size: types.Vec2 = .{ .x = -1, .y = -1 },
@@ -76,7 +93,7 @@ pub const Ui = struct {
     force_layout: bool = true,
     force_paint: bool = true,
     draw_generation: u32 = 0,
-    scroll_animation_active: bool = false,
+    active_scroll_nodes: std.ArrayList(types.NodeId) = .empty,
     clipboard: ?platform_events.Clipboard = null,
 
     pub fn init(allocator: std.mem.Allocator) !Ui {
@@ -100,6 +117,9 @@ pub const Ui = struct {
     }
 
     pub fn deinit(self: *Ui) void {
+        self.active_scroll_nodes.deinit(self.allocator);
+        self.activation_touched.deinit(self.allocator);
+        self.activation_slots.deinit(self.allocator);
         self.handlers.deinit(self.allocator);
         self.frame_events.deinit(self.allocator);
         self.batcher.deinit();
@@ -115,32 +135,53 @@ pub const Ui = struct {
         self.pointer_capture = false;
         self.clipboard = frame.clipboard;
         self.input.beginFrame();
-        self.frame_events.clearRetainingCapacity();
-        for (frame.events) |event| {
-            try self.routePlatformEvent(event);
+        for (self.activation_touched.items) |index| {
+            if (index < self.activation_slots.items.len) self.activation_slots.items[index].count = 0;
         }
+        self.activation_touched.clearRetainingCapacity();
+        self.frame_events.clearRetainingCapacity();
+        var pending_mouse_move: ?types.Vec2 = null;
+        for (frame.events) |event| {
+            switch (event) {
+                .mouse_move => |pos| pending_mouse_move = pos,
+                else => {
+                    if (pending_mouse_move) |pos| {
+                        try self.routePlatformEvent(.{ .mouse_move = pos });
+                        pending_mouse_move = null;
+                    }
+                    try self.routePlatformEvent(event);
+                },
+            }
+        }
+        if (pending_mouse_move) |pos| try self.routePlatformEvent(.{ .mouse_move = pos });
         self.dispatchFrameEvents();
     }
 
     pub fn endFrame(self: *Ui) !void {
         const dirty_counts = self.tree.dirtyCounts();
+        var layout_stats: layout_mod.LayoutStats = .{};
 
         const resized = self.window_size.x != self.last_window_size.x or
             self.window_size.y != self.last_window_size.y;
         const needs_layout = self.force_layout or resized or dirty_counts.layout > 0;
 
         if (needs_layout) {
-            layout_mod.layoutTree(&self.tree, self.root, self.window_size, self.font_atlas);
+            layout_stats.add(layout_mod.layoutTreeMeasured(
+                &self.tree,
+                self.root,
+                self.window_size,
+                self.font_atlas,
+                self.force_layout or resized,
+            ));
         }
 
         const input_scroll = self.applyScrollInput();
-        const scrolled = if (input_scroll or self.scroll_animation_active)
-            self.updateScrollNode(self.root) or input_scroll
+        const scrolled = if (input_scroll or self.active_scroll_nodes.items.len != 0)
+            self.updateActiveScrollNodes() or input_scroll
         else
             false;
-        self.scroll_animation_active = scrolled;
         if (scrolled) {
-            layout_mod.layoutTree(&self.tree, self.root, self.window_size, self.font_atlas);
+            layout_stats.add(layout_mod.layoutTreeMeasured(&self.tree, self.root, self.window_size, self.font_atlas, false));
         }
 
         // Geometry can change while the pointer stays still. Refresh hover
@@ -155,9 +196,10 @@ pub const Ui = struct {
         }
 
         const needs_paint = self.force_paint or needs_layout or scrolled or hover_changed or dirty_counts.paint > 0;
+        var paint_stats: paint_mod.PaintStats = .{};
         if (needs_paint) {
             self.paint_list.clearRetainingCapacity();
-            try paint_mod.buildPaintList(&self.tree, self.root, &self.paint_list);
+            paint_stats = try paint_mod.buildPaintListMeasured(&self.tree, self.root, &self.paint_list);
             self.draw_generation +%= 1;
             self.current_draw_data = try self.batcher.build(self.paint_list.commands.items, self.font_atlas, self.text_raster_scale);
             self.current_draw_data.generation = self.draw_generation;
@@ -166,7 +208,7 @@ pub const Ui = struct {
         self.last_window_size = self.window_size;
         self.force_layout = false;
         self.force_paint = false;
-        self.updateStats(dirty_counts.layout, dirty_counts.paint);
+        self.updateStats(dirty_counts.layout, dirty_counts.paint, layout_stats, paint_stats, needs_paint);
         self.tree.clearTrackedDirty();
     }
 
@@ -299,13 +341,11 @@ pub const Ui = struct {
     }
 
     pub fn activationCount(self: *const Ui, id: types.NodeId) usize {
-        var count: usize = 0;
-        for (self.frame_events.items) |event| switch (event) {
-            .activate => |activation| {
-                if (activation.target == id) count += 1;
-            },
-        };
-        return count;
+        if (id == types.invalid_node) return 0;
+        const index = types.nodeIndex(id);
+        if (index >= self.activation_slots.items.len) return 0;
+        const slot = self.activation_slots.items[index];
+        return if (slot.node == id) slot.count else 0;
     }
 
     pub fn frameEvents(self: *const Ui) []const events_mod.Event {
@@ -328,27 +368,27 @@ pub const Ui = struct {
     }
 
     pub fn mouseDown(self: *const Ui, button: platform_events.MouseButton) bool {
-        return input_mod.mouseDown(self.input, button);
+        return input_mod.mouseDown(&self.input, button);
     }
 
     pub fn mousePressed(self: *const Ui, button: platform_events.MouseButton) bool {
-        return input_mod.mousePressed(self.input, button);
+        return input_mod.mousePressed(&self.input, button);
     }
 
     pub fn mouseReleased(self: *const Ui, button: platform_events.MouseButton) bool {
-        return input_mod.mouseReleased(self.input, button);
+        return input_mod.mouseReleased(&self.input, button);
     }
 
     pub fn keyDown(self: *const Ui, key: platform_events.Key) bool {
-        return input_mod.keyDown(self.input, key);
+        return input_mod.keyDown(&self.input, key);
     }
 
     pub fn keyPressed(self: *const Ui, key: platform_events.Key) bool {
-        return input_mod.keyPressed(self.input, key);
+        return input_mod.keyPressed(&self.input, key);
     }
 
     pub fn keyReleased(self: *const Ui, key: platform_events.Key) bool {
-        return input_mod.keyReleased(self.input, key);
+        return input_mod.keyReleased(&self.input, key);
     }
 
     pub fn textInput(self: *const Ui) []const u8 {
@@ -465,6 +505,7 @@ pub const Ui = struct {
 
     fn routePlatformEvent(self: *Ui, event: platform_events.PlatformEvent) !void {
         const target = input_mod.routeEvent(&self.tree, self.root, &self.input, event) orelse return;
+        try self.recordActivation(target);
         try self.frame_events.append(self.allocator, .{ .activate = .{
             .target = target,
             .source = .{ .pointer = .{
@@ -472,6 +513,19 @@ pub const Ui = struct {
                 .position = self.input.mouse_pos,
             } },
         } });
+    }
+
+    fn recordActivation(self: *Ui, target: types.NodeId) !void {
+        const index = types.nodeIndex(target);
+        if (index >= self.activation_slots.items.len) {
+            const old_len = self.activation_slots.items.len;
+            try self.activation_slots.resize(self.allocator, index + 1);
+            @memset(self.activation_slots.items[old_len..], .{});
+        }
+        const slot = &self.activation_slots.items[index];
+        if (slot.node != target) slot.* = .{ .node = target };
+        if (slot.count == 0) try self.activation_touched.append(self.allocator, index);
+        slot.count +|= 1;
     }
 
     fn dispatchFrameEvents(self: *Ui) void {
@@ -509,12 +563,15 @@ pub const Ui = struct {
         if (self.input.focused == id) self.input.focused = types.invalid_node;
 
         const index = types.nodeIndex(id);
+        if (index < self.activation_slots.items.len and self.activation_slots.items[index].node == id) {
+            self.activation_slots.items[index] = .{};
+        }
         if (index < self.handlers.items.len and self.handlers.items[index].node == id) {
             self.handlers.items[index] = .{};
         }
     }
 
-    fn updateStats(self: *Ui, dirty_layout_count: u32, dirty_paint_count: u32) void {
+    fn updateStats(self: *Ui, dirty_layout_count: u32, dirty_paint_count: u32, layout_stats: layout_mod.LayoutStats, paint_stats: paint_mod.PaintStats, geometry_rebuilt: bool) void {
         self.stats = .{
             .node_count = @intCast(self.tree.nodes.items.len - self.tree.free_list.items.len),
             .dirty_layout_count = dirty_layout_count,
@@ -524,6 +581,16 @@ pub const Ui = struct {
             .index_count = @intCast(self.batcher.indices.items.len),
             .batch_count = @intCast(self.batcher.batches.items.len),
             .draw_call_count = @intCast(self.batcher.batches.items.len),
+            .layout_measured_count = layout_stats.measured_nodes,
+            .layout_positioned_count = layout_stats.positioned_nodes,
+            .layout_skipped_subtree_count = layout_stats.skipped_clean_subtrees,
+            .hidden_layout_node_count = layout_stats.skipped_hidden_nodes,
+            .paint_visited_count = paint_stats.visited_nodes,
+            .paint_culled_subtree_count = paint_stats.culled_subtrees,
+            .paint_culled_command_count = paint_stats.culled_commands,
+            .geometry_rebuild_count = if (geometry_rebuilt) 1 else 0,
+            .shaped_glyph_count = self.batcher.shaped_glyph_count,
+            .reused_glyph_count = self.batcher.reused_glyph_count,
         };
     }
 
@@ -543,41 +610,51 @@ pub const Ui = struct {
         clampScroll(node);
         const changed = before.x != node.scroll_target_offset.x or before.y != node.scroll_target_offset.y;
         if (changed) {
-            node.dirty.layout = true;
-            node.dirty.paint = true;
-            self.tree.queueDirty(target);
+            self.tree.markLayoutDirty(target);
+            self.trackActiveScroll(target);
         }
         return changed;
     }
 
-    /// Single traversal that clamps scroll offsets to the current content
-    /// size and advances scroll animations toward their targets.
-    fn updateScrollNode(self: *Ui, id: types.NodeId) bool {
-        const node = self.tree.get(id) orelse return false;
-        if (!node.flags.visible) return false;
+    fn trackActiveScroll(self: *Ui, id: types.NodeId) void {
+        for (self.active_scroll_nodes.items) |existing| if (existing == id) return;
+        self.active_scroll_nodes.append(self.allocator, id) catch {};
+    }
 
-        const before = node.scroll_offset;
-        const before_target = node.scroll_target_offset;
-        clampScroll(node);
-        var changed = before_target.x != node.scroll_target_offset.x or
-            before_target.y != node.scroll_target_offset.y;
-        changed = animateNodeScroll(node, self.dt) or changed;
-        changed = changed or
-            before.x != node.scroll_offset.x or
-            before.y != node.scroll_offset.y;
-        if (changed) {
-            node.dirty.layout = true;
-            node.dirty.paint = true;
-            self.tree.queueDirty(id);
-        }
+    /// Advances only scroll containers with an outstanding animation rather
+    /// than walking the complete UI tree on every animated frame.
+    fn updateActiveScrollNodes(self: *Ui) bool {
+        var any_changed = false;
+        var index: usize = 0;
+        while (index < self.active_scroll_nodes.items.len) {
+            const id = self.active_scroll_nodes.items[index];
+            const node = self.tree.get(id) orelse {
+                _ = self.active_scroll_nodes.swapRemove(index);
+                continue;
+            };
+            if (!node.flags.visible) {
+                _ = self.active_scroll_nodes.swapRemove(index);
+                continue;
+            }
 
-        var child = node.first_child;
-        while (child != types.invalid_node) {
-            const next = if (self.tree.getConst(child)) |child_node| child_node.next_sibling else types.invalid_node;
-            changed = self.updateScrollNode(child) or changed;
-            child = next;
+            const before = node.scroll_offset;
+            const before_target = node.scroll_target_offset;
+            clampScroll(node);
+            var changed = before_target.x != node.scroll_target_offset.x or
+                before_target.y != node.scroll_target_offset.y;
+            changed = animateNodeScroll(node, self.dt) or changed;
+            changed = changed or before.x != node.scroll_offset.x or before.y != node.scroll_offset.y;
+            if (changed) {
+                self.tree.markLayoutDirty(id);
+                any_changed = true;
+            }
+            const settled = node.scroll_offset.x == node.scroll_target_offset.x and
+                node.scroll_offset.y == node.scroll_target_offset.y;
+            if (settled) {
+                _ = self.active_scroll_nodes.swapRemove(index);
+            } else index += 1;
         }
-        return changed;
+        return any_changed;
     }
 };
 

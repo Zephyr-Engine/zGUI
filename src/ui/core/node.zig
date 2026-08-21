@@ -57,6 +57,7 @@ pub const Node = struct {
     text: ?[]const u8 = null,
     /// Retained allocation used by changing labels to avoid per-update churn.
     text_storage: ?[]u8 = null,
+    text_revision: u32 = 0,
     image: ?Image = null,
 
     // Cached text measurement, valid while the text is unchanged and the

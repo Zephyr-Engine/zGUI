@@ -8,6 +8,7 @@ pub const WindowManager = struct {
     free_list: std.ArrayList(u32) = .empty,
     next_z: u32 = 1,
     focused: types.WindowId = types.invalid_window,
+    order_revision: u32 = 1,
 
     pub fn init(allocator: std.mem.Allocator) WindowManager {
         return .{ .allocator = allocator };
@@ -54,6 +55,7 @@ pub const WindowManager = struct {
             .z_index = self.nextZ(),
         };
         self.focused = id;
+        self.order_revision +%= 1;
         return id;
     }
 
@@ -64,12 +66,14 @@ pub const WindowManager = struct {
         window.open = false;
         self.free_list.appendAssumeCapacity(types.windowIndex(id));
         if (self.focused == id) self.focused = types.invalid_window;
+        self.order_revision +%= 1;
     }
 
     pub fn bringToFront(self: *WindowManager, id: types.WindowId) void {
         const window = self.get(id) orelse return;
         window.z_index = self.nextZ();
         self.focused = id;
+        self.order_revision +%= 1;
     }
 
     pub fn get(self: *WindowManager, id: types.WindowId) ?*window_mod.Window {

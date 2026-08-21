@@ -105,9 +105,8 @@ pub const UiTree = struct {
             node.text = storage[0..bytes.len];
         }
         node.dirty.text = true;
-        node.dirty.layout = true;
-        node.dirty.paint = true;
-        self.queueDirty(id);
+        node.text_revision +%= 1;
+        self.markLayoutDirty(id);
     }
 
     pub fn appendChild(self: *UiTree, parent: types.NodeId, child: types.NodeId) !void {
@@ -134,9 +133,7 @@ pub const UiTree = struct {
         }
         parent_node.last_child = child;
         parent_node.dirty.children = true;
-        parent_node.dirty.layout = true;
-        parent_node.dirty.paint = true;
-        self.queueDirty(parent);
+        self.markLayoutDirty(parent);
     }
 
     pub fn removeChild(self: *UiTree, parent: types.NodeId, child: types.NodeId) void {
@@ -160,9 +157,7 @@ pub const UiTree = struct {
         child_node.next_sibling = types.invalid_node;
         child_node.prev_sibling = types.invalid_node;
         parent_node.dirty.children = true;
-        parent_node.dirty.layout = true;
-        parent_node.dirty.paint = true;
-        self.queueDirty(parent);
+        self.markLayoutDirty(parent);
     }
 
     pub fn get(self: *UiTree, id: types.NodeId) ?*node_mod.Node {
@@ -191,6 +186,21 @@ pub const UiTree = struct {
             return;
         };
         node.dirty.queued = true;
+    }
+
+    /// Marks a node and every layout-dependent ancestor. Once a previously
+    /// propagated node is reached, all remaining ancestors are already dirty.
+    pub fn markLayoutDirty(self: *UiTree, id: types.NodeId) void {
+        var current = id;
+        while (self.get(current)) |node| {
+            if (node.dirty.layout_propagated) break;
+            node.dirty.layout = true;
+            node.dirty.paint = true;
+            self.queueDirty(current);
+            node.dirty.layout_propagated = true;
+            current = node.parent;
+            if (current == types.invalid_node) break;
+        }
     }
 
     pub fn dirtyCounts(self: *const UiTree) DirtyCounts {

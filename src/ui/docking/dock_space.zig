@@ -87,6 +87,10 @@ pub const DockSpace = struct {
     // Nodes owned by the embedding application that should render above all
     // dock chrome (for example, application menus and context popups).
     external_overlays: std.ArrayList(types.NodeId) = .empty,
+    overlay_revision: u32 = 1,
+    ordered_dock_revision: u32 = std.math.maxInt(u32),
+    ordered_window_revision: u32 = std.math.maxInt(u32),
+    ordered_overlay_revision: u32 = std.math.maxInt(u32),
 
     pub fn init(allocator: std.mem.Allocator) !DockSpace {
         return .{
@@ -192,12 +196,14 @@ pub const DockSpace = struct {
             if (existing == node) return;
         }
         try self.external_overlays.append(self.allocator, node);
+        self.overlay_revision +%= 1;
     }
 
     pub fn unregisterOverlay(self: *DockSpace, node: types.NodeId) void {
         for (self.external_overlays.items, 0..) |existing, index| {
             if (existing != node) continue;
             _ = self.external_overlays.orderedRemove(index);
+            self.overlay_revision +%= 1;
             return;
         }
     }
@@ -393,6 +399,12 @@ pub const DockSpace = struct {
     /// and drag overlays on top. Re-appends only when the order is wrong, so
     /// the steady state leaves the tree untouched.
     fn applyPaintOrder(self: *DockSpace, ui: *app.Ui, parent: types.NodeId) !void {
+        if (self.ordered_dock_revision == self.dock.revision and
+            self.ordered_window_revision == self.windows.order_revision and
+            self.ordered_overlay_revision == self.overlay_revision)
+        {
+            return;
+        }
         self.order_scratch.clearRetainingCapacity();
         try self.collectSplitHandles(self.dock.root);
 
@@ -413,6 +425,9 @@ pub const DockSpace = struct {
         try self.order_scratch.append(self.allocator, self.overlays.drag_ghost);
         try self.order_scratch.appendSlice(self.allocator, self.external_overlays.items);
         ensureTailOrder(ui, parent, self.order_scratch.items);
+        self.ordered_dock_revision = self.dock.revision;
+        self.ordered_window_revision = self.windows.order_revision;
+        self.ordered_overlay_revision = self.overlay_revision;
     }
 
     fn collectSplitHandles(self: *DockSpace, id: types.DockNodeId) !void {

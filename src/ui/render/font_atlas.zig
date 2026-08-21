@@ -38,6 +38,11 @@ pub const Glyph = struct {
     atlas_h: u32 = 0,
 };
 
+pub const TextAdvance = struct {
+    codepoint: u21,
+    advance: f32,
+};
+
 pub const FontAtlas = struct {
     allocator: std.mem.Allocator,
     font_bytes: []u8,
@@ -50,6 +55,7 @@ pub const FontAtlas = struct {
     advances: std.AutoHashMap(GlyphKey, f32),
     kern_pairs: std.AutoHashMap(KernKey, f32),
     renderable: std.AutoHashMap(u21, u21),
+    coverage_scratch: std.ArrayList(u8) = .empty,
     ascent: c_int = 0,
     descent: c_int = 0,
     line_gap: c_int = 0,
@@ -82,6 +88,10 @@ pub const FontAtlas = struct {
         const pixels = try allocator.alloc(u8, byte_count);
         errdefer allocator.free(pixels);
         clearPixels(pixels);
+        // Texel zero is permanently reserved as an opaque-white sample. Solid
+        // UI geometry can therefore share this texture with text and avoid a
+        // texture switch between a control background and its label.
+        pixels[3] = 255;
 
         return .{
             .allocator = allocator,
@@ -102,6 +112,7 @@ pub const FontAtlas = struct {
     }
 
     pub fn deinit(self: *FontAtlas) void {
+        self.coverage_scratch.deinit(self.allocator);
         self.renderable.deinit();
         self.kern_pairs.deinit();
         self.advances.deinit();
@@ -200,10 +211,35 @@ pub const FontAtlas = struct {
         return self.glyphs.count();
     }
 
+    /// Rasterizes a known working set up front so first interaction does not
+    /// pay allocator, stb_truetype, and texture-upload costs glyph by glyph.
+    pub fn prewarmGlyphs(self: *FontAtlas, codepoints: []const u21, logical_sizes: []const f32, raster_scale: f32) !void {
+        const entry_count = std.math.mul(usize, codepoints.len, logical_sizes.len) catch return error.TooManyGlyphs;
+        try self.glyphs.ensureTotalCapacity(@intCast(@min(entry_count + self.glyphs.count(), std.math.maxInt(u32))));
+        try self.advances.ensureTotalCapacity(@intCast(@min(entry_count + self.advances.count(), std.math.maxInt(u32))));
+        try self.renderable.ensureTotalCapacity(@intCast(@min(codepoints.len + self.renderable.count(), std.math.maxInt(u32))));
+        for (logical_sizes) |size| {
+            for (codepoints) |codepoint| _ = try self.getGlyphScaled(codepoint, size, raster_scale);
+        }
+    }
+
+    pub fn prewarmAscii(self: *FontAtlas, logical_sizes: []const f32, raster_scale: f32) !void {
+        var codepoints: [95]u21 = undefined;
+        for (&codepoints, 0..) |*codepoint, index| codepoint.* = @intCast(0x20 + index);
+        try self.prewarmGlyphs(&codepoints, logical_sizes, raster_scale);
+    }
+
     pub fn lineHeight(self: *const FontAtlas, size: f32) f32 {
         const scale = self.scaleForSize(size);
         const height = @as(f32, @floatFromInt(self.ascent - self.descent + self.line_gap)) * scale;
         return if (height > 0) height else size * 1.25;
+    }
+
+    pub fn whiteUv(self: *const FontAtlas) types.Vec2 {
+        return .{
+            .x = 0.5 / @as(f32, @floatFromInt(self.width)),
+            .y = 0.5 / @as(f32, @floatFromInt(self.height)),
+        };
     }
 
     /// Distance from the top of the font's em box to its baseline at `size`.
@@ -224,6 +260,14 @@ pub const FontAtlas = struct {
         const scaled = @as(f32, @floatFromInt(kern)) * scale;
         self.kern_pairs.put(key, scaled) catch {};
         return scaled;
+    }
+
+    /// Returns the resolved codepoint and horizontal advance used by text
+    /// layout, including kerning from `previous` when present.
+    pub fn textAdvance(self: *FontAtlas, previous: ?u21, raw_codepoint: u21, size: f32) TextAdvance {
+        const codepoint = self.renderableCodepoint(raw_codepoint);
+        const kern = if (previous) |left| self.kerning(left, codepoint, size) else 0;
+        return .{ .codepoint = codepoint, .advance = kern + self.cachedAdvance(codepoint, size) };
     }
 
     fn cachedAdvance(self: *FontAtlas, codepoint: u21, size: f32) f32 {
@@ -262,8 +306,9 @@ pub const FontAtlas = struct {
         const padding: u32 = 1;
         const allocation = self.allocate(bitmap_w + padding * 2, bitmap_h + padding * 2) orelse return error.AtlasFull;
 
-        const coverage = try self.allocator.alloc(u8, @as(usize, bitmap_w) * @as(usize, bitmap_h));
-        defer self.allocator.free(coverage);
+        const coverage_len = @as(usize, bitmap_w) * @as(usize, bitmap_h);
+        try self.coverage_scratch.resize(self.allocator, coverage_len);
+        const coverage = self.coverage_scratch.items;
         c.stbtt_MakeCodepointBitmap(
             &self.font_info,
             coverage.ptr,

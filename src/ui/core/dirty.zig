@@ -7,17 +7,13 @@ pub const DirtyFlags = packed struct {
     text: bool = false,
     children: bool = false,
     queued: bool = false,
+    /// True once layout dirtiness has been propagated through the current
+    /// ancestor chain. This lets repeated mutations in one frame stop early.
+    layout_propagated: bool = false,
 };
 
 pub fn markLayoutDirty(tree: *tree_mod.UiTree, id: types.NodeId) void {
-    var current = id;
-    while (tree.get(current)) |node| {
-        node.dirty.layout = true;
-        node.dirty.paint = true;
-        tree.queueDirty(current);
-        current = node.parent;
-        if (current == types.invalid_node) break;
-    }
+    tree.markLayoutDirty(id);
 }
 
 pub fn markPaintDirty(tree: *tree_mod.UiTree, id: types.NodeId) void {
@@ -26,4 +22,3 @@ pub fn markPaintDirty(tree: *tree_mod.UiTree, id: types.NodeId) void {
         tree.queueDirty(id);
     }
 }
-
