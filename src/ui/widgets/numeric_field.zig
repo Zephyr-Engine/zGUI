@@ -1,7 +1,12 @@
 const std = @import("std");
 const types = @import("../core/types.zig");
 const app = @import("../core/ui_context.zig");
+const theme_mod = @import("../theme.zig");
+const button = @import("button.zig");
+const label = @import("label.zig");
 const text_field = @import("text_field.zig");
+
+const stepper_width: f32 = 21;
 
 pub const Options = struct {
     min: ?f32 = null,
@@ -9,12 +14,18 @@ pub const Options = struct {
     step: ?f32 = null,
     max_bytes: usize = 64,
     width: @import("../core/style.zig").Size = .fill,
+    trailing_label: []const u8 = "",
+    trailing_label_color: theme_mod.ColorRole = .text_muted,
 };
 
 pub const NumericResult = struct { changed: bool = false, committed: bool = false, invalid: bool = false };
 
 pub const NumericField = struct {
     text: text_field.TextField,
+    stepper_node: types.NodeId,
+    increment_button: types.NodeId,
+    decrement_button: types.NodeId,
+    trailing_label_node: types.NodeId,
     kind: Kind,
     invalid: bool = false,
 
@@ -36,7 +47,45 @@ pub const NumericField = struct {
             .i32, .u32 => try std.fmt.bufPrint(&buf, "{d}", .{value}),
             .f32 => try std.fmt.bufPrint(&buf, "{d}", .{value}),
         };
-        return .{ .text = try text_field.TextField.init(allocator, ui, parent, .{ .text = formatted, .max_bytes = options.max_bytes, .width = options.width }), .kind = kind };
+        const stepper_height = ui.theme.metrics.control_height;
+        var text = try text_field.TextField.init(allocator, ui, parent, .{ .text = formatted, .max_bytes = options.max_bytes, .width = options.width, .height = stepper_height });
+        errdefer text.deinit(ui);
+
+        // Keep edited text clear of the controls even while their hover-only
+        // surface is hidden, so revealing the stepper never shifts the value.
+        ui.tree.get(text.root_node).?.style.padding.right = stepper_width + 3;
+
+        const trailing_label_node = try label.label(ui, text.root_node, options.trailing_label, ui.theme.textStyle(.{
+            .width = .{ .px = stepper_width },
+            .height = .{ .px = stepper_height },
+            .padding = .{ .left = 7, .top = ui.centeredTextTop(stepper_height, ui.theme.font.tiny) },
+            .color = options.trailing_label_color,
+            .size = ui.theme.font.tiny,
+        }));
+        try ui.setVisible(trailing_label_node, false);
+
+        const stepper_node = try ui.createNode(.panel);
+        const stepper = ui.tree.get(stepper_node).?;
+        stepper.style = ui.theme.style(.{
+            .width = .{ .px = stepper_width },
+            .height = .{ .px = stepper_height },
+            .direction = .column,
+        });
+        stepper.flags.visible = false;
+        stepper.flags.clipped = true;
+        try ui.tree.appendChild(text.root_node, stepper_node);
+
+        const increment_button = try button.button(ui, stepper_node, "\u{2303}", stepperButtonStyle(ui, true, stepper_height));
+        const decrement_button = try button.button(ui, stepper_node, "\u{2304}", stepperButtonStyle(ui, false, stepper_height));
+
+        return .{
+            .text = text,
+            .stepper_node = stepper_node,
+            .increment_button = increment_button,
+            .decrement_button = decrement_button,
+            .trailing_label_node = trailing_label_node,
+            .kind = kind,
+        };
     }
 
     pub fn deinit(self: *NumericField, ui: *app.Ui) void {
@@ -45,54 +94,134 @@ pub const NumericField = struct {
     }
 
     pub fn updateI32(self: *NumericField, ui: *app.Ui, value: *i32, options: Options) !NumericResult {
-        const event = try self.text.update(ui, fieldOptions(options, self.invalid));
-        if (!event.committed) return .{ .changed = event.changed, .invalid = self.invalid };
-        const parsed = std.fmt.parseInt(i32, self.text.text(), 10) catch {
-            self.invalid = true;
+        const event = try self.text.update(ui, fieldOptions(self.kind, options, self.invalid));
+        const step_count = try self.updateStepper(ui, options);
+        if (event.committed) {
+            const parsed = std.fmt.parseInt(i32, self.text.text(), 10) catch {
+                self.invalid = true;
+                try self.syncValue(ui, value.*, options);
+                if (step_count == 0) return .{ .committed = true, .invalid = true };
+                return self.stepI32(ui, value, options, step_count);
+            };
+            var next: f32 = @floatFromInt(parsed);
+            next = try applyHints(next, options);
+            value.* = toI32(next);
+            self.invalid = false;
             try self.syncValue(ui, value.*, options);
-            return .{ .committed = true, .invalid = true };
-        };
-        var next: f32 = @floatFromInt(parsed);
-        next = try applyHints(next, options);
-        value.* = @intFromFloat(std.math.clamp(@round(next), @as(f32, @floatFromInt(std.math.minInt(i32))), @as(f32, @floatFromInt(std.math.maxInt(i32)))));
-        self.invalid = false;
-        try self.syncValue(ui, value.*, options);
+        }
+        if (step_count != 0) return self.stepI32(ui, value, options, step_count);
+        if (!event.committed) return .{ .changed = event.changed, .invalid = self.invalid };
         return .{ .changed = true, .committed = true };
     }
 
     pub fn updateU32(self: *NumericField, ui: *app.Ui, value: *u32, options: Options) !NumericResult {
-        const event = try self.text.update(ui, fieldOptions(options, self.invalid));
-        if (!event.committed) return .{ .changed = event.changed, .invalid = self.invalid };
-        const parsed = std.fmt.parseInt(u32, self.text.text(), 10) catch {
-            self.invalid = true;
+        const event = try self.text.update(ui, fieldOptions(self.kind, options, self.invalid));
+        const step_count = try self.updateStepper(ui, options);
+        if (event.committed) {
+            const parsed = std.fmt.parseInt(u32, self.text.text(), 10) catch {
+                self.invalid = true;
+                try self.syncValue(ui, value.*, options);
+                if (step_count == 0) return .{ .committed = true, .invalid = true };
+                return self.stepU32(ui, value, options, step_count);
+            };
+            var next: f32 = @floatFromInt(parsed);
+            next = try applyHints(next, options);
+            value.* = toU32(next);
+            self.invalid = false;
             try self.syncValue(ui, value.*, options);
-            return .{ .committed = true, .invalid = true };
-        };
-        var next: f32 = @floatFromInt(parsed);
-        next = try applyHints(next, options);
-        value.* = @intFromFloat(std.math.clamp(@round(next), 0, @as(f32, @floatFromInt(std.math.maxInt(u32)))));
-        self.invalid = false;
-        try self.syncValue(ui, value.*, options);
+        }
+        if (step_count != 0) return self.stepU32(ui, value, options, step_count);
+        if (!event.committed) return .{ .changed = event.changed, .invalid = self.invalid };
         return .{ .changed = true, .committed = true };
     }
 
     pub fn updateF32(self: *NumericField, ui: *app.Ui, value: *f32, options: Options) !NumericResult {
-        const event = try self.text.update(ui, fieldOptions(options, self.invalid));
+        const event = try self.text.update(ui, fieldOptions(self.kind, options, self.invalid));
+        const step_count = try self.updateStepper(ui, options);
+        if (event.committed) {
+            const parsed = std.fmt.parseFloat(f32, self.text.text()) catch {
+                self.invalid = true;
+                try self.syncValue(ui, value.*, options);
+                if (step_count == 0) return .{ .committed = true, .invalid = true };
+                return self.stepF32(ui, value, options, step_count);
+            };
+            const next = applyHints(parsed, options) catch {
+                self.invalid = true;
+                try self.syncValue(ui, value.*, options);
+                if (step_count == 0) return .{ .committed = true, .invalid = true };
+                return self.stepF32(ui, value, options, step_count);
+            };
+            value.* = next;
+            self.invalid = false;
+            try self.syncValue(ui, value.*, options);
+        }
+        if (step_count != 0) return self.stepF32(ui, value, options, step_count);
         if (!event.committed) return .{ .changed = event.changed, .invalid = self.invalid };
-        const parsed = std.fmt.parseFloat(f32, self.text.text()) catch {
-            self.invalid = true;
-            try self.syncValue(ui, value.*, options);
-            return .{ .committed = true, .invalid = true };
-        };
-        const next = applyHints(parsed, options) catch {
-            self.invalid = true;
-            try self.syncValue(ui, value.*, options);
-            return .{ .committed = true, .invalid = true };
-        };
-        value.* = next;
+        return .{ .changed = true, .committed = true };
+    }
+
+    fn updateStepper(self: *NumericField, ui: *app.Ui, options: Options) !i32 {
+        const root = ui.tree.getConst(self.text.root_node) orelse return error.InvalidNode;
+        if (root.bounds.w <= 0) {
+            try ui.setVisible(self.stepper_node, false);
+            try ui.setVisible(self.trailing_label_node, false);
+            return 0;
+        }
+        var style = ui.nodeStyle(self.stepper_node) orelse return error.InvalidNode;
+        const next_left = @max(0, root.bounds.w - stepper_width - root.style.padding.left);
+        const next_top = -root.style.padding.top;
+        if (style.margin.left != next_left or style.margin.top != next_top) {
+            style.margin.left = next_left;
+            style.margin.top = next_top;
+            try ui.setStyle(self.stepper_node, style);
+        }
+
+        var label_style = ui.nodeStyle(self.trailing_label_node) orelse return error.InvalidNode;
+        const next_label_top = -root.style.padding.top;
+        if (label_style.margin.left != next_left or label_style.margin.top != next_label_top or
+            !std.meta.eql(label_style.foreground, ui.theme.color(options.trailing_label_color)))
+        {
+            label_style.margin.left = next_left;
+            label_style.margin.top = next_label_top;
+            label_style.foreground = ui.theme.color(options.trailing_label_color);
+            try ui.setStyle(self.trailing_label_node, label_style);
+        }
+        try ui.setText(self.trailing_label_node, options.trailing_label);
+
+        const hovered = isWithin(ui, ui.input.hovered, self.text.root_node);
+        try ui.setVisible(self.stepper_node, hovered);
+        try ui.setVisible(self.trailing_label_node, !hovered and options.trailing_label.len != 0);
+        if (ui.input.hovered == self.increment_button or ui.input.hovered == self.decrement_button) ui.requestCursor(.hand);
+
+        const increment_count: i32 = @intCast(ui.activationCount(self.increment_button));
+        const decrement_count: i32 = @intCast(ui.activationCount(self.decrement_button));
+        return increment_count - decrement_count;
+    }
+
+    fn stepI32(self: *NumericField, ui: *app.Ui, value: *i32, options: Options, count: i32) !NumericResult {
+        const previous = value.*;
+        const next = try steppedValue(@floatFromInt(previous), options, count);
+        value.* = toI32(next);
         self.invalid = false;
         try self.syncValue(ui, value.*, options);
-        return .{ .changed = true, .committed = true };
+        return .{ .changed = value.* != previous, .committed = true };
+    }
+
+    fn stepU32(self: *NumericField, ui: *app.Ui, value: *u32, options: Options, count: i32) !NumericResult {
+        const previous = value.*;
+        const next = try steppedValue(@floatFromInt(previous), options, count);
+        value.* = toU32(next);
+        self.invalid = false;
+        try self.syncValue(ui, value.*, options);
+        return .{ .changed = value.* != previous, .committed = true };
+    }
+
+    fn stepF32(self: *NumericField, ui: *app.Ui, value: *f32, options: Options, count: i32) !NumericResult {
+        const previous = value.*;
+        value.* = try steppedValue(previous, options, count);
+        self.invalid = false;
+        try self.syncValue(ui, value.*, options);
+        return .{ .changed = value.* != previous, .committed = true };
     }
 
     fn syncValue(self: *NumericField, ui: *app.Ui, value: anytype, options: Options) !void {
@@ -102,8 +231,70 @@ pub const NumericField = struct {
     }
 };
 
-fn fieldOptions(options: Options, invalid: bool) text_field.Options {
-    return .{ .max_bytes = options.max_bytes, .width = options.width, .invalid = invalid };
+fn stepperButtonStyle(ui: *const app.Ui, top: bool, height: f32) @import("../core/style.zig").Style {
+    return ui.theme.style(.{
+        .width = .fill,
+        .height = .{ .px = height / 2 },
+        .padding = .{ .left = 7, .top = 1 },
+        .background = .panel_soft,
+        .foreground = .text_dim,
+        .hover_background = .accent_soft,
+        .pressed_background = .accent,
+        .border = .stroke,
+        .hover_border = .accent,
+        .pressed_border = .accent,
+        .border_width = 0,
+        .border_edges = if (top) .{ .left = 1, .bottom = 1 } else .{ .left = 1 },
+        .radius_corners = if (top)
+            .{ .top_right = ui.theme.radius_tokens.control }
+        else
+            .{ .bottom_right = ui.theme.radius_tokens.control },
+        .font_size = 11,
+    });
+}
+
+fn isWithin(ui: *const app.Ui, candidate: types.NodeId, ancestor: types.NodeId) bool {
+    var current = candidate;
+    while (current != types.invalid_node) {
+        if (current == ancestor) return true;
+        current = (ui.tree.getConst(current) orelse return false).parent;
+    }
+    return false;
+}
+
+fn steppedValue(value: f32, options: Options, count: i32) !f32 {
+    const increment = options.step orelse 1;
+    if (increment <= 0 or !std.math.isFinite(increment)) return error.InvalidStep;
+    return applyHints(value + increment * @as(f32, @floatFromInt(count)), options);
+}
+
+fn toI32(value: f32) i32 {
+    const rounded = @round(value);
+    // The positive integer limits round outward when represented as f32, so
+    // branch before @intFromFloat instead of feeding it an out-of-range value.
+    if (rounded >= @as(f32, @floatFromInt(std.math.maxInt(i32)))) return std.math.maxInt(i32);
+    if (rounded <= @as(f32, @floatFromInt(std.math.minInt(i32)))) return std.math.minInt(i32);
+    return @intFromFloat(rounded);
+}
+
+fn toU32(value: f32) u32 {
+    const rounded = @round(value);
+    if (rounded <= 0) return 0;
+    if (rounded >= @as(f32, @floatFromInt(std.math.maxInt(u32)))) return std.math.maxInt(u32);
+    return @intFromFloat(rounded);
+}
+
+fn fieldOptions(kind: NumericField.Kind, options: Options, invalid: bool) text_field.Options {
+    return .{
+        .max_bytes = options.max_bytes,
+        .width = options.width,
+        .invalid = invalid,
+        .input_mode = switch (kind) {
+            .i32 => .signed_integer,
+            .u32 => .unsigned_integer,
+            .f32 => .decimal,
+        },
+    };
 }
 
 pub fn commitFloat(text: []const u8, options: Options) !f32 {
@@ -146,4 +337,118 @@ test "invalid numeric text rolls back without changing committed value" {
     try std.testing.expect(result.invalid);
     try std.testing.expectEqual(@as(i32, 42), value);
     try std.testing.expectEqualStrings("42", field.text.text());
+}
+
+test "numeric fields filter non-numeric keyboard and pasted input" {
+    var ui = try app.Ui.init(std.testing.allocator);
+    defer ui.deinit();
+
+    var signed = try NumericField.initI32(std.testing.allocator, &ui, ui.rootNode(), 0, .{});
+    defer signed.deinit(&ui);
+    var signed_value: i32 = 0;
+    ui.requestFocus(signed.text.root_node);
+    signed.text.selectAll();
+    try ui.beginFrame(.{
+        .events = &.{.{ .text_input = "abc-12.3xyz" }},
+        .window_size = .{ .x = 200, .y = 50 },
+    });
+    const signed_result = try signed.updateI32(&ui, &signed_value, .{});
+    try std.testing.expect(signed_result.changed);
+    try std.testing.expectEqualStrings("-123", signed.text.text());
+    try ui.endFrame();
+
+    var unsigned = try NumericField.initU32(std.testing.allocator, &ui, ui.rootNode(), 0, .{});
+    defer unsigned.deinit(&ui);
+    var unsigned_value: u32 = 0;
+    ui.requestFocus(unsigned.text.root_node);
+    unsigned.text.selectAll();
+    try ui.beginFrame(.{
+        .events = &.{.{ .text_input = "abc-12xyz" }},
+        .window_size = .{ .x = 200, .y = 50 },
+    });
+    const unsigned_result = try unsigned.updateU32(&ui, &unsigned_value, .{});
+    try std.testing.expect(unsigned_result.changed);
+    try std.testing.expectEqualStrings("12", unsigned.text.text());
+    try ui.endFrame();
+
+    var decimal = try NumericField.initF32(std.testing.allocator, &ui, ui.rootNode(), 0, .{});
+    defer decimal.deinit(&ui);
+    var decimal_value: f32 = 0;
+    ui.requestFocus(decimal.text.root_node);
+    decimal.text.selectAll();
+    try ui.beginFrame(.{
+        .events = &.{.{ .text_input = "abc-1.25xyz" }},
+        .window_size = .{ .x = 200, .y = 50 },
+    });
+    const decimal_result = try decimal.updateF32(&ui, &decimal_value, .{});
+    try std.testing.expect(decimal_result.changed);
+    try std.testing.expectEqualStrings("-1.25", decimal.text.text());
+}
+
+test "numeric stepper reveals on hover and increments and decrements" {
+    var ui = try app.Ui.init(std.testing.allocator);
+    defer ui.deinit();
+    const options = Options{ .width = .{ .px = 120 }, .trailing_label = "X", .trailing_label_color = .danger };
+    var field = try NumericField.initI32(std.testing.allocator, &ui, ui.rootNode(), 10, options);
+    defer field.deinit(&ui);
+    var value: i32 = 10;
+
+    // First retained frame establishes geometry. The controls remain hidden
+    // until the following update observes the field under the pointer.
+    try ui.beginFrame(.{ .window_size = .{ .x = 200, .y = 50 } });
+    _ = try field.updateI32(&ui, &value, options);
+    try ui.endFrame();
+    try std.testing.expect(!ui.tree.getConst(field.stepper_node).?.flags.visible);
+
+    try ui.beginFrame(.{
+        .events = &.{.{ .mouse_move = .{ .x = 60, .y = 17 } }},
+        .window_size = .{ .x = 200, .y = 50 },
+    });
+    _ = try field.updateI32(&ui, &value, options);
+    try ui.endFrame();
+    try std.testing.expect(ui.tree.getConst(field.stepper_node).?.flags.visible);
+    try std.testing.expect(!ui.tree.getConst(field.trailing_label_node).?.flags.visible);
+
+    const up = ui.bounds(field.increment_button).?;
+    const up_center = types.Vec2{ .x = up.x + up.w / 2, .y = up.y + up.h / 2 };
+    try ui.beginFrame(.{
+        .events = &.{ .{ .mouse_move = up_center }, .{ .mouse_down = .left }, .{ .mouse_up = .left } },
+        .window_size = .{ .x = 200, .y = 50 },
+    });
+    const incremented = try field.updateI32(&ui, &value, options);
+    try std.testing.expect(incremented.changed and incremented.committed);
+    try std.testing.expectEqual(@as(i32, 11), value);
+    try std.testing.expectEqualStrings("11", field.text.text());
+    try std.testing.expectEqual(@import("../platform/events.zig").CursorKind.hand, ui.requestedCursor());
+    try ui.endFrame();
+
+    const down = ui.bounds(field.decrement_button).?;
+    const down_center = types.Vec2{ .x = down.x + down.w / 2, .y = down.y + down.h / 2 };
+    try ui.beginFrame(.{
+        .events = &.{ .{ .mouse_move = down_center }, .{ .mouse_down = .left }, .{ .mouse_up = .left } },
+        .window_size = .{ .x = 200, .y = 50 },
+    });
+    const decremented = try field.updateI32(&ui, &value, options);
+    try std.testing.expect(decremented.changed and decremented.committed);
+    try std.testing.expectEqual(@as(i32, 10), value);
+    try std.testing.expectEqualStrings("10", field.text.text());
+    try ui.endFrame();
+
+    try ui.beginFrame(.{
+        .events = &.{.{ .mouse_move = .{ .x = 180, .y = 40 } }},
+        .window_size = .{ .x = 200, .y = 50 },
+    });
+    _ = try field.updateI32(&ui, &value, options);
+    try std.testing.expect(!ui.tree.getConst(field.stepper_node).?.flags.visible);
+    try std.testing.expect(ui.tree.getConst(field.trailing_label_node).?.flags.visible);
+    try std.testing.expectEqualStrings("X", ui.tree.getConst(field.trailing_label_node).?.text.?);
+    try std.testing.expectEqual(ui.theme.color(.danger), ui.nodeStyle(field.trailing_label_node).?.foreground);
+}
+
+test "numeric stepper respects configured step and bounds" {
+    try std.testing.expectEqual(@as(f32, 1.75), try steppedValue(1.5, .{ .step = 0.25 }, 1));
+    try std.testing.expectEqual(@as(f32, 2), try steppedValue(1.75, .{ .max = 2, .step = 0.25 }, 2));
+    try std.testing.expectEqual(@as(f32, 0), try steppedValue(0, .{ .min = 0 }, -1));
+    try std.testing.expectEqual(std.math.maxInt(i32), toI32(@floatFromInt(std.math.maxInt(i32))));
+    try std.testing.expectEqual(std.math.maxInt(u32), toU32(@floatFromInt(std.math.maxInt(u32))));
 }

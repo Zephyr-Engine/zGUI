@@ -5,14 +5,22 @@ const input_mod = @import("../core/input.zig");
 const text_mod = @import("../core/text.zig");
 const dirty = @import("../core/dirty.zig");
 
+pub const InputMode = enum {
+    text,
+    signed_integer,
+    unsigned_integer,
+    decimal,
+};
+
 pub const Options = struct {
     text: []const u8 = "",
     placeholder: []const u8 = "",
     max_bytes: usize = 4096,
     multiline: bool = false,
     width: @import("../core/style.zig").Size = .fill,
-    height: f32 = 34,
+    height: ?f32 = null,
     invalid: bool = false,
+    input_mode: InputMode = .text,
 };
 
 pub const TextFieldResult = struct {
@@ -26,6 +34,7 @@ pub const TextField = struct {
     buffer: std.ArrayListUnmanaged(u8) = .empty,
     original: std.ArrayListUnmanaged(u8) = .empty,
     scratch: std.ArrayListUnmanaged(u8) = .empty,
+    candidate: std.ArrayListUnmanaged(u8) = .empty,
     cursor: usize = 0,
     selection_anchor: ?usize = null,
     horizontal_scroll: f32 = 0,
@@ -46,13 +55,23 @@ pub const TextField = struct {
         try self.original.appendSlice(allocator, options.text);
         self.cursor = options.text.len;
 
+        const field_height = options.height orelse ui.theme.metrics.control_height;
+        const line_height = ui.textLineHeight(ui.theme.font.body);
+        const line_top = if (options.multiline) 1 else @max(0, (field_height - line_height) / 2);
+        const text_top = if (options.multiline) 0 else ui.centeredTextTop(field_height, ui.theme.font.body);
+
         self.root_node = try ui.createNode(.panel);
         errdefer ui.destroySubtree(self.root_node);
         const root = ui.tree.get(self.root_node).?;
         root.style = ui.theme.style(.{
             .width = options.width,
-            .height = .{ .px = options.height },
-            .padding = .{ .left = 8, .right = 8, .top = 8, .bottom = 7 },
+            .height = .{ .px = field_height },
+            .padding = .{
+                .left = ui.theme.space.lg,
+                .right = ui.theme.space.lg,
+                .top = if (options.multiline) ui.theme.space.md else 0,
+                .bottom = if (options.multiline) ui.theme.space.md else 0,
+            },
             .direction = .absolute,
             .overflow_x = .visible,
             .background = .control,
@@ -69,18 +88,18 @@ pub const TextField = struct {
 
         self.selection_node = try ui.createNode(.panel);
         const selection = ui.tree.get(self.selection_node).?;
-        selection.style = ui.theme.style(.{ .width = .{ .px = 0 }, .height = .fill, .background = .accent_soft });
+        selection.style = ui.theme.style(.{ .width = .{ .px = 0 }, .height = .{ .px = line_height }, .margin = .{ .top = line_top }, .background = .accent_soft });
         selection.flags.visible = false;
         try ui.tree.appendChild(self.root_node, self.selection_node);
 
         self.text_node = try ui.createNode(.label);
-        ui.tree.get(self.text_node).?.style = ui.theme.textStyle(.{ .width = .hug, .height = .fill, .size = ui.theme.font.body });
+        ui.tree.get(self.text_node).?.style = ui.theme.textStyle(.{ .width = .hug, .height = .fill, .margin = .{ .top = text_top }, .size = ui.theme.font.body });
         try ui.tree.setText(self.text_node, displayText(&self, options));
         try ui.tree.appendChild(self.root_node, self.text_node);
 
         self.caret_node = try ui.createNode(.panel);
         const caret = ui.tree.get(self.caret_node).?;
-        caret.style = ui.theme.style(.{ .width = .{ .px = 1.5 }, .height = .fill, .background = .text });
+        caret.style = ui.theme.style(.{ .width = .{ .px = 1 }, .height = .{ .px = line_height }, .margin = .{ .top = line_top }, .background = .text });
         caret.flags.visible = false;
         try ui.tree.appendChild(self.root_node, self.caret_node);
         return self;
@@ -91,6 +110,7 @@ pub const TextField = struct {
         self.buffer.deinit(self.allocator);
         self.original.deinit(self.allocator);
         self.scratch.deinit(self.allocator);
+        self.candidate.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -232,7 +252,7 @@ pub const TextField = struct {
         while (index < bytes.len) {
             const start = index;
             const cp = text_mod.decodeNext(bytes, &index) orelse break;
-            if (cp < 0x20 and !(options.multiline and cp == '\n')) continue;
+            if (!allowedCodepoint(cp, options)) continue;
             try self.scratch.appendSlice(self.allocator, bytes[start..index]);
         }
         if (self.scratch.items.len == 0) return false;
@@ -240,6 +260,14 @@ pub const TextField = struct {
         const available = options.max_bytes -| (self.buffer.items.len - selection_len);
         const insert_len = utf8PrefixLen(self.scratch.items, available);
         if (insert_len == 0) return false;
+
+        const replacement = self.selectionRange() orelse Range{ .start = self.cursor, .end = self.cursor };
+        self.candidate.clearRetainingCapacity();
+        try self.candidate.appendSlice(self.allocator, self.buffer.items[0..replacement.start]);
+        try self.candidate.appendSlice(self.allocator, self.scratch.items[0..insert_len]);
+        try self.candidate.appendSlice(self.allocator, self.buffer.items[replacement.end..]);
+        if (!validInput(self.candidate.items, options.input_mode)) return false;
+
         _ = try self.eraseSelection();
         try self.buffer.ensureUnusedCapacity(self.allocator, insert_len);
         const old_len = self.buffer.items.len;
@@ -267,7 +295,14 @@ pub const TextField = struct {
     }
 
     fn eraseSelection(self: *TextField) !bool {
-        const range = self.selectionRange() orelse return false;
+        const range = self.selectionRange() orelse {
+            // A click-drag that ends where it began can leave an anchor with
+            // no actual selection. Clear it before an insertion or deletion
+            // moves the cursor, otherwise it becomes a stale out-of-bounds
+            // selection on the edited buffer.
+            self.selection_anchor = null;
+            return false;
+        };
         self.eraseRange(range.start, range.end);
         self.cursor = range.start;
         self.selection_anchor = null;
@@ -281,9 +316,11 @@ pub const TextField = struct {
 
     const Range = struct { start: usize, end: usize };
     fn selectionRange(self: *const TextField) ?Range {
-        const anchor = self.selection_anchor orelse return null;
-        if (anchor == self.cursor) return null;
-        return .{ .start = @min(anchor, self.cursor), .end = @max(anchor, self.cursor) };
+        const raw_anchor = self.selection_anchor orelse return null;
+        const anchor = @min(raw_anchor, self.buffer.items.len);
+        const cursor = @min(self.cursor, self.buffer.items.len);
+        if (anchor == cursor) return null;
+        return .{ .start = @min(anchor, cursor), .end = @max(anchor, cursor) };
     }
 
     fn copySelection(self: *const TextField, ui: *app.Ui) void {
@@ -346,16 +383,37 @@ pub const TextField = struct {
 
         const caret_x = measure(ui, self.buffer.items[0..self.cursor], ui.theme.font.body);
         const inner_width = @max(0, root.bounds.w - root.style.padding.horizontal());
-        if (!options.multiline) {
+        if (!focused) {
+            // Display inactive values from the beginning. Keeping the caret at
+            // the end is useful when editing, but must not make ordinary form
+            // values look truncated before the user focuses the control.
+            self.horizontal_scroll = 0;
+        } else if (!options.multiline) {
             if (caret_x - self.horizontal_scroll > inner_width) self.horizontal_scroll = caret_x - inner_width;
             if (caret_x - self.horizontal_scroll < 0) self.horizontal_scroll = caret_x;
         } else self.horizontal_scroll = 0;
         var layout_changed = false;
+        if (!options.multiline and root.bounds.h > 0) {
+            const next_text_top = ui.centeredTextTop(root.bounds.h, ui.theme.font.body);
+            if (text_node.style.margin.top != next_text_top) {
+                text_node.style.margin.top = next_text_top;
+                layout_changed = true;
+            }
+        }
         if (text_node.style.margin.left != -self.horizontal_scroll) {
             text_node.style.margin.left = -self.horizontal_scroll;
             layout_changed = true;
         }
         const caret = ui.tree.get(self.caret_node).?;
+        if (!options.multiline and root.bounds.h > 0) {
+            const next_line_height: @TypeOf(caret.style.height) = .{ .px = ui.textLineHeight(ui.theme.font.body) };
+            const next_line_top = @max(0, (root.bounds.h - ui.textLineHeight(ui.theme.font.body)) / 2);
+            if (!std.meta.eql(caret.style.height, next_line_height) or caret.style.margin.top != next_line_top) {
+                caret.style.height = next_line_height;
+                caret.style.margin.top = next_line_top;
+                layout_changed = true;
+            }
+        }
         if (caret.flags.visible != focused) {
             caret.flags.visible = focused;
             dirty.markPaintDirty(&ui.tree, self.caret_node);
@@ -366,6 +424,15 @@ pub const TextField = struct {
         }
 
         const selection = ui.tree.get(self.selection_node).?;
+        if (!options.multiline and root.bounds.h > 0) {
+            const next_line_height: @TypeOf(selection.style.height) = .{ .px = ui.textLineHeight(ui.theme.font.body) };
+            const next_line_top = @max(0, (root.bounds.h - ui.textLineHeight(ui.theme.font.body)) / 2);
+            if (!std.meta.eql(selection.style.height, next_line_height) or selection.style.margin.top != next_line_top) {
+                selection.style.height = next_line_height;
+                selection.style.margin.top = next_line_top;
+                layout_changed = true;
+            }
+        }
         if (self.selectionRange()) |range| {
             const start_x = measure(ui, self.buffer.items[0..range.start], ui.theme.font.body);
             const end_x = measure(ui, self.buffer.items[0..range.end], ui.theme.font.body);
@@ -391,6 +458,72 @@ pub const TextField = struct {
 
 fn displayText(self: *const TextField, options: Options) []const u8 {
     return if (self.buffer.items.len == 0 and options.placeholder.len != 0) options.placeholder else self.buffer.items;
+}
+
+fn allowedCodepoint(codepoint: u21, options: Options) bool {
+    if (options.input_mode == .text) {
+        return codepoint >= 0x20 or (options.multiline and codepoint == '\n');
+    }
+    if (codepoint >= '0' and codepoint <= '9') return true;
+    return switch (options.input_mode) {
+        .text => unreachable,
+        .signed_integer => codepoint == '+' or codepoint == '-',
+        .unsigned_integer => false,
+        .decimal => codepoint == '+' or codepoint == '-' or codepoint == '.' or codepoint == 'e' or codepoint == 'E',
+    };
+}
+
+fn validInput(bytes: []const u8, mode: InputMode) bool {
+    return switch (mode) {
+        .text => true,
+        .signed_integer => validInteger(bytes, true),
+        .unsigned_integer => validInteger(bytes, false),
+        .decimal => validDecimal(bytes),
+    };
+}
+
+fn validInteger(bytes: []const u8, signed: bool) bool {
+    var index: usize = 0;
+    if (signed and bytes.len != 0 and (bytes[0] == '+' or bytes[0] == '-')) index = 1;
+    while (index < bytes.len) : (index += 1) {
+        if (!std.ascii.isDigit(bytes[index])) return false;
+    }
+    return true;
+}
+
+fn validDecimal(bytes: []const u8) bool {
+    var index: usize = 0;
+    if (index < bytes.len and (bytes[index] == '+' or bytes[index] == '-')) index += 1;
+
+    var mantissa_digits: usize = 0;
+    while (index < bytes.len and std.ascii.isDigit(bytes[index])) : (index += 1) mantissa_digits += 1;
+    if (index < bytes.len and bytes[index] == '.') {
+        index += 1;
+        while (index < bytes.len and std.ascii.isDigit(bytes[index])) : (index += 1) mantissa_digits += 1;
+    }
+    if (index == bytes.len) return true;
+    if (mantissa_digits == 0 or (bytes[index] != 'e' and bytes[index] != 'E')) return false;
+
+    index += 1;
+    if (index < bytes.len and (bytes[index] == '+' or bytes[index] == '-')) index += 1;
+    while (index < bytes.len) : (index += 1) {
+        if (!std.ascii.isDigit(bytes[index])) return false;
+    }
+    return true;
+}
+
+test "numeric input modes accept partial numeric syntax only" {
+    try std.testing.expect(validInput("-", .signed_integer));
+    try std.testing.expect(validInput("-42", .signed_integer));
+    try std.testing.expect(!validInput("4.2", .signed_integer));
+    try std.testing.expect(!validInput("-1", .unsigned_integer));
+    try std.testing.expect(validInput("", .decimal));
+    try std.testing.expect(validInput("-.", .decimal));
+    try std.testing.expect(validInput(".5", .decimal));
+    try std.testing.expect(validInput("1e-", .decimal));
+    try std.testing.expect(validInput("1e-3", .decimal));
+    try std.testing.expect(!validInput("e3", .decimal));
+    try std.testing.expect(!validInput("1.2.3", .decimal));
 }
 
 fn measure(ui: *app.Ui, bytes: []const u8, size: f32) f32 {
@@ -450,6 +583,57 @@ test "UTF-8 boundaries step over whole codepoints" {
     try std.testing.expectEqual(@as(usize, 7), nextBoundary(value, 3));
     try std.testing.expectEqual(@as(usize, 3), prevBoundary(value, 7));
     try std.testing.expectEqual(@as(usize, 1), prevBoundary(value, 3));
+}
+
+test "unfocused fields display from the beginning instead of the caret" {
+    var ui = try app.Ui.init(std.testing.allocator);
+    defer ui.deinit();
+    var field = try TextField.init(std.testing.allocator, &ui, ui.rootNode(), .{
+        .text = "A value wider than its field",
+        .width = .{ .px = 60 },
+    });
+    defer field.deinit(&ui);
+
+    try ui.beginFrame(.{ .window_size = .{ .x = 100, .y = 50 } });
+    _ = try field.update(&ui, .{});
+    try std.testing.expectEqual(@as(f32, 0), field.horizontal_scroll);
+}
+
+test "single-line fields center text using font vertical metrics" {
+    const font_atlas_mod = @import("../render/font_atlas.zig");
+    const font_bytes = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "assets/fonts/Inter-Regular.ttf", std.testing.allocator, .limited(4 * 1024 * 1024));
+    defer std.testing.allocator.free(font_bytes);
+    var atlas = try font_atlas_mod.FontAtlas.init(std.testing.allocator, font_bytes, 256, 256);
+    defer atlas.deinit();
+
+    var ui = try app.Ui.init(std.testing.allocator);
+    defer ui.deinit();
+    ui.setFontAtlas(&atlas);
+    var field = try TextField.init(std.testing.allocator, &ui, ui.rootNode(), .{ .text = "Centered", .height = 32 });
+    defer field.deinit(&ui);
+
+    const expected_text_top = ui.centeredTextTop(32, ui.theme.font.body);
+    try std.testing.expectApproxEqAbs(expected_text_top, ui.nodeStyle(field.text_node).?.margin.top, 0.001);
+    try std.testing.expectApproxEqAbs((32 - atlas.lineHeight(ui.theme.font.body)) / 2, ui.nodeStyle(field.caret_node).?.margin.top, 0.001);
+    try std.testing.expect(expected_text_top < 8);
+}
+
+test "deleting after a zero-width selection clears the stale anchor" {
+    var ui = try app.Ui.init(std.testing.allocator);
+    defer ui.deinit();
+    var field = try TextField.init(std.testing.allocator, &ui, ui.rootNode(), .{ .text = "1" });
+    defer field.deinit(&ui);
+
+    field.cursor = 1;
+    field.selection_anchor = 1;
+    try std.testing.expect(try field.eraseBackward());
+    try std.testing.expectEqualStrings("", field.text());
+    try std.testing.expect(field.selection_anchor == null);
+
+    // Regression guard for the inspector crash: painting the edited field
+    // must never slice the empty buffer with the old selection endpoint.
+    try ui.beginFrame(.{ .window_size = .{ .x = 120, .y = 50 } });
+    try field.syncVisuals(&ui, .{});
 }
 
 const TestClipboard = struct {

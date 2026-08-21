@@ -206,6 +206,12 @@ pub const FontAtlas = struct {
         return if (height > 0) height else size * 1.25;
     }
 
+    /// Distance from the top of the font's em box to its baseline at `size`.
+    /// Widgets use this with lineHeight to vertically center a text baseline.
+    pub fn baselineOffset(self: *const FontAtlas, size: f32) f32 {
+        return @as(f32, @floatFromInt(self.ascent)) * self.scaleForSize(size);
+    }
+
     pub fn spaceAdvance(self: *FontAtlas, size: f32) f32 {
         return self.cachedAdvance(' ', size);
     }

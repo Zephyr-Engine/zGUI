@@ -1,3 +1,4 @@
+const std = @import("std");
 const types = @import("core/types.zig");
 const style_mod = @import("core/style.zig");
 
@@ -12,11 +13,24 @@ pub const ColorRole = enum {
     viewport,
     stroke,
     stroke_soft,
+    overlay,
+    overlay_soft,
+    overlay_stroke,
+    interaction_hover,
+    interaction_pressed,
     text,
     text_dim,
     text_muted,
+    text_disabled,
+    icon,
+    icon_selected,
+    icon_disabled,
     accent,
     accent_soft,
+    accent_hover,
+    accent_pressed,
+    accent_border,
+    accent_border_strong,
     violet,
     violet_soft,
     success,
@@ -49,13 +63,26 @@ pub const Palette = struct {
 
     stroke: types.Color = types.Color.rgba(58, 58, 68, 255),
     stroke_soft: types.Color = types.Color.rgba(42, 42, 50, 255),
+    overlay: types.Color = types.Color.rgba(17, 18, 22, 232),
+    overlay_soft: types.Color = types.Color.rgba(30, 30, 36, 220),
+    overlay_stroke: types.Color = types.Color.rgba(255, 255, 255, 24),
+    interaction_hover: types.Color = types.Color.rgba(255, 255, 255, 18),
+    interaction_pressed: types.Color = types.Color.rgba(255, 255, 255, 30),
 
     text: types.Color = types.Color.rgba(245, 245, 246, 255),
     text_dim: types.Color = types.Color.rgba(177, 179, 187, 255),
     text_muted: types.Color = types.Color.rgba(123, 126, 136, 255),
+    text_disabled: types.Color = types.Color.rgba(91, 94, 106, 160),
+    icon: types.Color = types.Color.rgba(194, 198, 207, 255),
+    icon_selected: types.Color = types.Color.rgba(224, 213, 255, 255),
+    icon_disabled: types.Color = types.Color.rgba(112, 115, 124, 160),
 
     accent: types.Color = types.Color.rgba(139, 92, 246, 255),
     accent_soft: types.Color = types.Color.rgba(48, 36, 78, 255),
+    accent_hover: types.Color = types.Color.rgba(139, 92, 246, 50),
+    accent_pressed: types.Color = types.Color.rgba(139, 92, 246, 70),
+    accent_border: types.Color = types.Color.rgba(139, 92, 246, 150),
+    accent_border_strong: types.Color = types.Color.rgba(167, 139, 250, 220),
     violet: types.Color = types.Color.rgba(167, 139, 250, 255),
     violet_soft: types.Color = types.Color.rgba(48, 40, 82, 255),
 
@@ -93,6 +120,14 @@ pub const Font = struct {
     brand: f32 = 18,
 };
 
+pub const Metrics = struct {
+    control_height: f32 = 34,
+    compact_control_height: f32 = 28,
+    section_header_height: f32 = 40,
+    dock_tab_height: f32 = 30,
+    dock_handle_thickness: f32 = 4,
+};
+
 pub const StyleOptions = struct {
     width: style_mod.Size = .hug,
     height: style_mod.Size = .hug,
@@ -106,7 +141,11 @@ pub const StyleOptions = struct {
     overflow_y: style_mod.Overflow = .visible,
     background: ColorRole = .transparent,
     foreground: ColorRole = .text,
+    hover_background: ?ColorRole = null,
+    pressed_background: ?ColorRole = null,
     border: ColorRole = .transparent,
+    hover_border: ?ColorRole = null,
+    pressed_border: ?ColorRole = null,
     border_width: f32 = 0,
     border_edges: ?style_mod.Edges = null,
     radius: RadiusRole = .none,
@@ -131,6 +170,7 @@ pub const Theme = struct {
     radius_tokens: Radius = .{},
     space: Space = .{},
     font: Font = .{},
+    metrics: Metrics = .{},
 
     pub fn color(self: Theme, role: ColorRole) types.Color {
         return switch (role) {
@@ -144,11 +184,24 @@ pub const Theme = struct {
             .viewport => self.palette.viewport,
             .stroke => self.palette.stroke,
             .stroke_soft => self.palette.stroke_soft,
+            .overlay => self.palette.overlay,
+            .overlay_soft => self.palette.overlay_soft,
+            .overlay_stroke => self.palette.overlay_stroke,
+            .interaction_hover => self.palette.interaction_hover,
+            .interaction_pressed => self.palette.interaction_pressed,
             .text => self.palette.text,
             .text_dim => self.palette.text_dim,
             .text_muted => self.palette.text_muted,
+            .text_disabled => self.palette.text_disabled,
+            .icon => self.palette.icon,
+            .icon_selected => self.palette.icon_selected,
+            .icon_disabled => self.palette.icon_disabled,
             .accent => self.palette.accent,
             .accent_soft => self.palette.accent_soft,
+            .accent_hover => self.palette.accent_hover,
+            .accent_pressed => self.palette.accent_pressed,
+            .accent_border => self.palette.accent_border,
+            .accent_border_strong => self.palette.accent_border_strong,
             .violet => self.palette.violet,
             .violet_soft => self.palette.violet_soft,
             .success => self.palette.success,
@@ -185,7 +238,11 @@ pub const Theme = struct {
             .overflow_y = options.overflow_y,
             .background = self.color(options.background),
             .foreground = self.color(options.foreground),
+            .hover_background = if (options.hover_background) |role| self.color(role) else null,
+            .pressed_background = if (options.pressed_background) |role| self.color(role) else null,
             .border_color = self.color(options.border),
+            .hover_border_color = if (options.hover_border) |role| self.color(role) else null,
+            .pressed_border_color = if (options.pressed_border) |role| self.color(role) else null,
             .border_width = options.border_width,
             .border_edges = options.border_edges,
             .radius = options.radius_corners orelse style_mod.CornerRadii.all(options.radius_px orelse self.radius(options.radius)),
@@ -208,3 +265,16 @@ pub const Theme = struct {
 };
 
 pub const zephyr_dark = Theme{};
+
+test "style options resolve semantic interaction colors" {
+    const value = zephyr_dark.style(.{
+        .hover_background = .interaction_hover,
+        .pressed_background = .accent_pressed,
+        .hover_border = .accent_border,
+        .pressed_border = .accent_border_strong,
+    });
+    try std.testing.expectEqual(zephyr_dark.palette.interaction_hover, value.hover_background.?);
+    try std.testing.expectEqual(zephyr_dark.palette.accent_pressed, value.pressed_background.?);
+    try std.testing.expectEqual(zephyr_dark.palette.accent_border, value.hover_border_color.?);
+    try std.testing.expectEqual(zephyr_dark.palette.accent_border_strong, value.pressed_border_color.?);
+}

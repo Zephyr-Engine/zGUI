@@ -4,6 +4,7 @@ const tree_mod = @import("tree.zig");
 const layout_mod = @import("layout.zig");
 const input_mod = @import("input.zig");
 const paint_mod = @import("paint.zig");
+const text_mod = @import("text.zig");
 const theme_mod = @import("../theme.zig");
 const platform_events = @import("../platform/events.zig");
 const events_mod = @import("events.zig");
@@ -178,6 +179,16 @@ pub const Ui = struct {
         const next = if (std.math.isFinite(raster_scale)) @max(0.25, raster_scale) else 1;
         if (next != self.text_raster_scale) self.force_paint = true;
         self.text_raster_scale = next;
+    }
+
+    pub fn textLineHeight(self: *const Ui, size: f32) f32 {
+        return if (self.font_atlas) |atlas| atlas.lineHeight(size) else text_mod.measureFallback("", size).line_height;
+    }
+
+    pub fn centeredTextTop(self: *const Ui, height: f32, size: f32) f32 {
+        const baseline = if (self.font_atlas) |atlas| atlas.baselineOffset(size) else size;
+        const centered_baseline = (height - self.textLineHeight(size)) / 2 + baseline;
+        return @max(0, centered_baseline - size);
     }
 
     pub fn setTheme(self: *Ui, theme: theme_mod.Theme) void {
