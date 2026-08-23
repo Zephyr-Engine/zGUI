@@ -58,7 +58,13 @@ pub const SelectionList = struct {
             ui.destroySubtree(node);
         }
         while (self.item_nodes.items.len < labels.len) {
-            const item = try primitives.themedButton(ui, self.root_node, "", .{ .width = .fill, .height = .{ .px = 28 }, .variant = .ghost });
+            const item = try primitives.themedButton(ui, self.root_node, "", .{
+                .width = .fill,
+                .height = .{ .px = 28 },
+                .variant = .ghost,
+                .border = .transparent,
+                .border_width = 0,
+            });
             try self.item_nodes.append(self.allocator, item);
         }
         for (labels, self.item_nodes.items) |label, node| try ui.setText(node, label);
