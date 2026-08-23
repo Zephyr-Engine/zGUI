@@ -17,7 +17,6 @@ pub const SelectionList = struct {
             .width = .{ .px = 220 },
             .height = .hug,
             .direction = .column,
-            .padding = .{ .top = 4, .bottom = 4 },
             .background = .card,
             .border = .stroke,
             .border_width = 1,
@@ -61,9 +60,11 @@ pub const SelectionList = struct {
             const item = try primitives.themedButton(ui, self.root_node, "", .{
                 .width = .fill,
                 .height = .{ .px = 28 },
+                .padding = .{ .left = 14, .right = 14, .top = 2, .bottom = 8 },
                 .variant = .ghost,
                 .border = .transparent,
                 .border_width = 0,
+                .font_size = ui.theme.font.body + 2,
             });
             applyItemStyle(ui, item);
             try self.item_nodes.append(self.allocator, item);
