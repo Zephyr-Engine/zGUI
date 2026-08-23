@@ -65,6 +65,7 @@ pub const SelectionList = struct {
                 .border = .transparent,
                 .border_width = 0,
             });
+            applyItemStyle(ui, item);
             try self.item_nodes.append(self.allocator, item);
         }
         for (labels, self.item_nodes.items) |label, node| try ui.setText(node, label);
@@ -90,13 +91,24 @@ pub const SelectionList = struct {
             try self.close(ui);
             return null;
         }
-        for (self.item_nodes.items, 0..) |node, index| if (ui.activated(node)) {
-            try self.close(ui);
-            return index;
-        };
+        for (self.item_nodes.items, 0..) |node, index| {
+            if (ui.input.hovered == node) ui.requestCursor(.hand);
+            if (ui.activated(node)) {
+                try self.close(ui);
+                return index;
+            }
+        }
         return null;
     }
 };
+
+fn applyItemStyle(ui: *app.Ui, item: types.NodeId) void {
+    const current = ui.nodeStyle(item) orelse return;
+    var next = current;
+    next.hover_background = ui.theme.color(.interaction_hover);
+    next.pressed_background = ui.theme.color(.interaction_pressed);
+    ui.setStyle(item, next) catch {};
+}
 
 fn isDescendant(ui: *const app.Ui, candidate: types.NodeId, ancestor: types.NodeId) bool {
     var node = candidate;
