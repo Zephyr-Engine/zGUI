@@ -154,6 +154,10 @@ pub const DockSpace = struct {
         return self.windows.getConst(window) != null;
     }
 
+    pub fn setWindowTitle(self: *DockSpace, window: DockWindowId, title: []const u8) !void {
+        try self.windows.setTitle(window, title);
+    }
+
     pub fn splitNode(
         self: *DockSpace,
         target: types.DockNodeId,

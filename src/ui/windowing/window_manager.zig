@@ -69,6 +69,14 @@ pub const WindowManager = struct {
         self.order_revision +%= 1;
     }
 
+    pub fn setTitle(self: *WindowManager, id: types.WindowId, title: []const u8) !void {
+        const window = self.get(id) orelse return error.InvalidWindow;
+        if (std.mem.eql(u8, window.title, title)) return;
+        const owned_title = try self.allocator.dupe(u8, title);
+        self.allocator.free(window.title);
+        window.title = owned_title;
+    }
+
     pub fn bringToFront(self: *WindowManager, id: types.WindowId) void {
         const window = self.get(id) orelse return;
         window.z_index = self.nextZ();
@@ -118,4 +126,14 @@ test "closed window slots are reused with a fresh generation" {
     try std.testing.expect(first != second);
     try std.testing.expect(windows.get(first) == null);
     try std.testing.expect(windows.get(second) != null);
+}
+
+test "window titles can be updated" {
+    var windows = WindowManager.init(std.testing.allocator);
+    defer windows.deinit();
+
+    const window = try windows.createWindow("Inspector", .{}, types.invalid_node, .{});
+    try windows.setTitle(window, "*Inspector");
+
+    try std.testing.expectEqualStrings("*Inspector", windows.getConst(window).?.title);
 }
