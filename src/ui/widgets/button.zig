@@ -10,6 +10,8 @@ pub const IconButtonOptions = struct {
     uv0: types.Vec2 = .{ .x = 0, .y = 0 },
     uv1: types.Vec2 = .{ .x = 1, .y = 1 },
     tint: types.Color = types.Color.rgba(255, 255, 255, 255),
+    hover_tint: ?types.Color = null,
+    pressed_tint: ?types.Color = null,
     on_activate: ?events.EventHandler = null,
 };
 
@@ -36,6 +38,8 @@ pub fn iconButton(ui: *app.Ui, parent: types.NodeId, options: IconButtonOptions)
         .uv0 = options.uv0,
         .uv1 = options.uv1,
         .tint = options.tint,
+        .hover_tint = options.hover_tint,
+        .pressed_tint = options.pressed_tint,
     };
     if (options.on_activate) |handler| try ui.setActivationHandler(id, handler);
     return id;

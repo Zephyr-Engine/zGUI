@@ -17,6 +17,8 @@ pub const Image = struct {
     uv0: types.Vec2 = .{ .x = 0, .y = 0 },
     uv1: types.Vec2 = .{ .x = 1, .y = 1 },
     tint: types.Color = types.Color.rgba(255, 255, 255, 255),
+    hover_tint: ?types.Color = null,
+    pressed_tint: ?types.Color = null,
 };
 
 pub const NodeFlags = packed struct {

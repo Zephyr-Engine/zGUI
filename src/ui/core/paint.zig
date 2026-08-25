@@ -95,8 +95,11 @@ fn buildPaintNode(tree: *const tree_mod.UiTree, root: types.NodeId, list: *Paint
     }
 
     const clipped = node.flags.clipped or node.style.overflow_x == .scroll or node.style.overflow_y == .scroll;
+    // Include the node's antialiased edge in its own clip. Its visual bounds
+    // already reserve this one-pixel outset, so this keeps control borders
+    // from losing their final edge at a clipping boundary.
     const effective_clip = if (clipped)
-        if (inherited_clip) |clip| intersectRects(clip, node.bounds) else node.bounds
+        if (inherited_clip) |clip| intersectRects(clip, outsetRect(node.bounds, 1)) else outsetRect(node.bounds, 1)
     else
         inherited_clip;
     if (effective_clip) |clip| {
@@ -130,12 +133,18 @@ fn buildPaintNode(tree: *const tree_mod.UiTree, root: types.NodeId, list: *Paint
     if (node.image) |image| {
         if (image.texture.isValid() and commandVisible(node.bounds, 1, effective_clip, stats)) {
             const image_rect = if (node.kind == .button) node.bounds.inset(node.style.padding) else node.bounds;
+            const tint = if (node.kind == .button and node.flags.pressed)
+                image.pressed_tint orelse image.tint
+            else if (node.kind == .button and node.flags.hovered)
+                image.hover_tint orelse image.tint
+            else
+                image.tint;
             try list.append(.{ .image = .{
                 .rect = image_rect,
                 .texture = image.texture,
                 .uv0 = image.uv0,
                 .uv1 = image.uv1,
-                .tint = image.tint,
+                .tint = tint,
                 .radius = node.style.radius,
             } });
         }

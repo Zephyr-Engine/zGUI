@@ -52,13 +52,16 @@ pub const Collapsible = struct {
 
         const header_style = ui.theme.style(.{
             .width = .fill,
-            .height = .{ .px = header_height },
+            .height = .{ .px = @max(0, header_height - 1) },
             .padding = .{ .left = ui.theme.space.lg, .right = ui.theme.space.md },
+            // The interactive fill sits inside the container's outline, so
+            // hover and press feedback never overwrite the section border.
+            .margin = .{ .left = 1, .right = 1, .top = 1 },
             .direction = .row,
             .background = .transparent,
             .foreground = options.title_color,
-            .hover_background = .panel_soft,
-            .pressed_background = .control,
+            .hover_background = .interaction_hover,
+            .pressed_background = .interaction_pressed,
             .border_width = 0,
             .radius_corners = headerRadii(ui, !options.initially_expanded),
             .font_size = ui.theme.font.body,
