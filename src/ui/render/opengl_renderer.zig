@@ -7,6 +7,8 @@ const c = @cImport({
     @cInclude("glad/glad.h");
 });
 
+const log = std.log.scoped(.zgui);
+
 pub const ProcAddressFn = *const fn (name: [*:0]const u8) ?*const anyopaque;
 
 var active_proc_address_fn: ?ProcAddressFn = null;
@@ -105,6 +107,7 @@ pub const OpenGlRenderer = struct {
         c.glViewport(0, 0, @intCast(framebuffer_width), @intCast(framebuffer_height));
         c.glClearColor(0.055, 0.06, 0.075, 1.0);
         c.glClear(c.GL_COLOR_BUFFER_BIT);
+        reportErrors("beginning UI frame");
     }
 
     pub fn render(self: *OpenGlRenderer, data: draw_data.DrawData) !void {
@@ -163,6 +166,7 @@ pub const OpenGlRenderer = struct {
         c.glDisable(c.GL_SCISSOR_TEST);
         c.glBindVertexArray(0);
         c.glUseProgram(0);
+        reportErrors("rendering UI");
     }
 
     pub fn createTextureRgba(self: *OpenGlRenderer, width: u32, height: u32, pixels: []const u8) !types.TextureHandle {
@@ -243,6 +247,7 @@ pub const OpenGlRenderer = struct {
     }
 
     pub fn syncFontAtlas(self: *OpenGlRenderer, font_atlas: *font_atlas_mod.FontAtlas) !void {
+        defer reportErrors("synchronizing UI font atlas");
         if (!font_atlas.texture.isValid()) {
             font_atlas.texture = try self.createTextureRgba(font_atlas.width, font_atlas.height, font_atlas.pixels);
             font_atlas.markClean();
@@ -348,6 +353,14 @@ fn uploadIndexBuffer(buffer: c.GLuint, data: []const u32, capacity: *usize) void
     }
     c.glBufferData(c.GL_ELEMENT_ARRAY_BUFFER, @intCast(capacity.*), null, c.GL_STREAM_DRAW);
     c.glBufferSubData(c.GL_ELEMENT_ARRAY_BUFFER, 0, @intCast(byte_len), data.ptr);
+}
+
+fn reportErrors(operation: []const u8) void {
+    while (true) {
+        const err = c.glGetError();
+        if (err == c.GL_NO_ERROR) return;
+        log.err("OpenGL error while {s}: 0x{x}", .{ operation, err });
+    }
 }
 
 fn nextBufferCapacity(required: usize) usize {
