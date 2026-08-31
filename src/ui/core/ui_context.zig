@@ -228,9 +228,7 @@ pub const Ui = struct {
     }
 
     pub fn centeredTextTop(self: *const Ui, height: f32, size: f32) f32 {
-        const baseline = if (self.font_atlas) |atlas| atlas.baselineOffset(size) else size;
-        const centered_baseline = (height - self.textLineHeight(size)) / 2 + baseline;
-        return @max(0, centered_baseline - size);
+        return @max(0, (height - self.textLineHeight(size)) / 2);
     }
 
     pub fn setTheme(self: *Ui, theme: theme_mod.Theme) void {

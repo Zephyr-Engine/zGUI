@@ -671,9 +671,18 @@ test "single-line fields center text using font vertical metrics" {
     defer field.deinit(&ui);
 
     const expected_text_top = ui.centeredTextTop(32, ui.theme.font.body);
+    const caret_top = (32 - atlas.lineHeight(ui.theme.font.body)) / 2;
     try std.testing.expectApproxEqAbs(expected_text_top, ui.nodeStyle(field.text_node).?.margin.top, 0.001);
-    try std.testing.expectApproxEqAbs((32 - atlas.lineHeight(ui.theme.font.body)) / 2, ui.nodeStyle(field.caret_node).?.margin.top, 0.001);
-    try std.testing.expect(expected_text_top < 8);
+    try std.testing.expectApproxEqAbs(caret_top, ui.nodeStyle(field.caret_node).?.margin.top, 0.001);
+    // Text and caret occupy the same line box, so they share a top offset.
+    try std.testing.expectApproxEqAbs(caret_top, expected_text_top, 0.001);
+    // The line box sits wholly inside the field with equal room above and below.
+    try std.testing.expect(expected_text_top > 0);
+    try std.testing.expectApproxEqAbs(
+        expected_text_top,
+        32 - expected_text_top - atlas.lineHeight(ui.theme.font.body),
+        0.001,
+    );
 }
 
 test "deleting after a zero-width selection clears the stale anchor" {

@@ -260,10 +260,14 @@ pub const Batcher = struct {
         const run = try self.textRun(text, atlas, raster_scale);
         if (run.glyphs.items.len == 0) return;
         try self.ensureBatch(atlas.texture, self.currentClip());
+        // The paint list places the pen at `padding.top + font_size` because it
+        // has no atlas to ask. A baseline actually sits at the ascent, so shift
+        // the run by the difference; otherwise every line rides low in its box.
+        const baseline_correction = atlas.baselineOffset(text.size) - text.size;
         for (run.glyphs.items) |positioned| {
             try self.addGlyphQuadToCurrentBatch(.{
                 .x = text.pos.x + positioned.rect.x,
-                .y = text.pos.y + positioned.rect.y,
+                .y = text.pos.y + baseline_correction + positioned.rect.y,
                 .w = positioned.rect.w,
                 .h = positioned.rect.h,
             }, positioned.glyph, text.color);

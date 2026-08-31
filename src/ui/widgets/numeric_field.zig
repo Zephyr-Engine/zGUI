@@ -48,15 +48,18 @@ pub const NumericField = struct {
             .f32 => try std.fmt.bufPrint(&buf, "{d}", .{value}),
         };
         const stepper_height = ui.theme.metrics.control_height;
+        // Holds either the stepper arrows or a trailing label, so it has to
+        // stay wide enough for a glyph at whatever size the theme asks for.
+        const affordance_width = @max(stepper_width, ui.theme.font.tiny + 10);
         var text = try text_field.TextField.init(allocator, ui, parent, .{ .text = formatted, .max_bytes = options.max_bytes, .width = options.width, .height = stepper_height });
         errdefer text.deinit(ui);
 
         // Keep edited text clear of the controls even while their hover-only
         // surface is hidden, so revealing the stepper never shifts the value.
-        ui.tree.get(text.root_node).?.style.padding.right = stepper_width + 3;
+        ui.tree.get(text.root_node).?.style.padding.right = affordance_width + 3;
 
         const trailing_label_node = try label.label(ui, text.root_node, options.trailing_label, ui.theme.textStyle(.{
-            .width = .{ .px = stepper_width },
+            .width = .{ .px = affordance_width },
             .height = .{ .px = stepper_height },
             .padding = .{ .left = 7, .top = ui.centeredTextTop(stepper_height, ui.theme.font.tiny) },
             .color = options.trailing_label_color,
@@ -67,7 +70,7 @@ pub const NumericField = struct {
         const stepper_node = try ui.createNode(.panel);
         const stepper = ui.tree.get(stepper_node).?;
         stepper.style = ui.theme.style(.{
-            .width = .{ .px = stepper_width },
+            .width = .{ .px = affordance_width },
             .height = .{ .px = stepper_height },
             .direction = .column,
         });
@@ -168,7 +171,10 @@ pub const NumericField = struct {
             return 0;
         }
         var style = ui.nodeStyle(self.stepper_node) orelse return error.InvalidNode;
-        const next_left = @max(0, root.bounds.w - stepper_width - root.style.padding.left);
+        // The field reserves a right gutter for whichever affordance is showing,
+        // so park both of them at its start. Deriving the offset from the gutter
+        // keeps the label inside the field when the theme scales its type.
+        const next_left = @max(0, root.bounds.w - root.style.padding.right - root.style.padding.left);
         const next_top = -root.style.padding.top;
         if (style.margin.left != next_left or style.margin.top != next_top) {
             style.margin.left = next_left;
