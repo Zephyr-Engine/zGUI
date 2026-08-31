@@ -73,7 +73,7 @@ pub const Collapsible = struct {
             .height = .fill,
             .padding = .{ .left = ui.theme.space.xxs, .top = header_text_top - 1 },
             .color = .text_muted,
-            .size = 13,
+            .size = ui.theme.font.body,
         }));
         _ = try label_mod.label(ui, header_node, title, ui.theme.textStyle(.{
             .width = .fill,

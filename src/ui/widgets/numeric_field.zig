@@ -249,7 +249,7 @@ fn stepperButtonStyle(ui: *const app.Ui, top: bool, height: f32) @import("../cor
             .{ .top_right = ui.theme.radius_tokens.control }
         else
             .{ .bottom_right = ui.theme.radius_tokens.control },
-        .font_size = 11,
+        .font_size = ui.theme.font.tiny,
     });
 }
 
