@@ -118,7 +118,7 @@ pub fn setLabel(ui: *app.Ui, id: types.NodeId, bytes: []const u8, active: bool) 
         next.width = .fill;
         next.height = .fill;
         next.padding = .{ .left = 10, .right = 8, .top = 7, .bottom = 5 };
-        next.foreground = ui.theme.color(if (active) .text else .text_dim);
+        next.foreground = ui.theme.color(if (active) .text else .text_muted);
         next.font_size = ui.theme.font.small;
         ui.setStyle(id, next) catch {};
         ui.setVisible(id, true) catch {};

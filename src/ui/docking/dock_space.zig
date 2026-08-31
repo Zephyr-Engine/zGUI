@@ -453,7 +453,19 @@ pub const DockSpace = struct {
         const nodes = self.leaf_nodes.items[index];
         const active = if (leaf.tabs.items.len == 0) null else leaf.tabs.items[@min(leaf.active_tab, leaf.tabs.items.len - 1)];
         setPanel(ui, nodes.host, leaf.rect, parent_origin, .panel, false);
-        setPanel(ui, nodes.tab_bar, .{ .x = leaf.rect.x, .y = leaf.rect.y, .w = leaf.rect.w, .h = options.tab_height }, .{ .x = leaf.rect.x, .y = leaf.rect.y }, .shell, false);
+        // The tab strip shares its surface with the content below and is
+        // closed by a hairline; an active tab's rule sits on top of that line.
+        setPanelStyledWithShape(
+            ui,
+            nodes.tab_bar,
+            .{ .x = leaf.rect.x, .y = leaf.rect.y, .w = leaf.rect.w, .h = options.tab_height },
+            .{ .x = leaf.rect.x, .y = leaf.rect.y },
+            .shell,
+            .stroke_soft,
+            .{ .bottom = 1 },
+            false,
+            style_mod.CornerRadii.all(0),
+        );
         const content_rect: types.Rect = .{
             .x = leaf.rect.x,
             .y = leaf.rect.y + options.tab_height,
@@ -476,30 +488,21 @@ pub const DockSpace = struct {
                     const is_hovered = tab_rect.contains(ui.input.mouse_pos);
                     const is_dragged = if (self.drag) |drag| drag.window == window_id else false;
                     ensureRootParent(ui, tab, nodes.tab_bar);
-                    // A selected tab is deliberately the same surface as its
-                    // content, visually joining the two. Inactive tabs remain
-                    // lighter so the current panel is obvious at a glance.
+                    // Tabs carry no chip of their own: every tab sits flat on
+                    // the strip, and the current one is marked by an accent
+                    // rule along its bottom edge, riding the strip's hairline.
+                    // Label contrast carries the rest, so selection never
+                    // depends on the accent colour alone.
                     const tab_background: theme_mod.ColorRole = if (is_dragged)
                         .accent_soft
-                    else if (is_active)
-                        .shell
-                    else if (is_hovered)
-                        .control
+                    else if (is_hovered and !is_active)
+                        .interaction_hover
                     else
-                        .panel_soft;
-                    // Keep the tabs calm: selection is a compact accent rule
-                    // rather than a heavy box outline. Background and label
-                    // contrast still distinguish the active panel without
-                    // relying on the accent colour alone.
+                        .transparent;
                     const tab_border: theme_mod.ColorRole = if (is_dragged or is_active) .accent else .transparent;
                     setPanelStyledWithShape(ui, tab, tab_rect, .{ .x = leaf.rect.x, .y = leaf.rect.y }, tab_background, tab_border, .{
-                        .top = if (is_dragged) 1 else if (is_active) 2 else 0,
-                    }, true, .{
-                        .top_left = if (is_active or is_dragged) 5 else 0,
-                        .top_right = if (is_active or is_dragged) 5 else 0,
-                        .bottom_left = 0,
-                        .bottom_right = 0,
-                    });
+                        .bottom = if (is_dragged or is_active) 2 else 0,
+                    }, true, style_mod.CornerRadii.all(0));
                     setLabel(ui, label, window.title, is_active);
                 }
                 ensureRootParent(ui, window.root_node, if (is_active) nodes.content else types.invalid_node);
@@ -523,7 +526,9 @@ pub const DockSpace = struct {
             resizeHandleVisualRect(hit_rect, split.axis, options.handle_thickness)
         else
             hit_rect;
-        setPanel(ui, nodes.handle, visual_rect, parent_origin, if (active or hovered) .accent else .transparent, true);
+        // Idle handles read as the grey seam separating panels; they only
+        // light up in the accent while being grabbed.
+        setPanel(ui, nodes.handle, visual_rect, parent_origin, if (active or hovered) .accent else .stroke_soft, true);
     }
 
     fn syncFloatingNodes(self: *DockSpace, ui: *app.Ui, parent: types.NodeId) !void {
