@@ -289,6 +289,9 @@ pub const Ui = struct {
         const node = self.tree.get(id) orelse return error.InvalidNode;
         if (node.flags.visible == visible) return;
         node.flags.visible = visible;
+        // Nothing inside a hidden subtree is measured, so what it shows on the
+        // frame it reappears has to be measured again rather than trusted.
+        if (visible) self.tree.markSubtreeDirty(id);
         dirty_mod.markLayoutDirty(&self.tree, id);
     }
 
@@ -1038,4 +1041,41 @@ test "destroySubtree clears interaction state for every descendant" {
     try std.testing.expectEqual(types.invalid_node, ui_state.input.hovered);
     try std.testing.expectEqual(types.invalid_node, ui_state.input.active);
     try std.testing.expectEqual(types.invalid_node, ui_state.input.focused);
+}
+
+test "revealing a subtree re-measures what was skipped while it was hidden" {
+    var ui_state = try Ui.init(std.testing.allocator);
+    defer ui_state.deinit();
+
+    const host = try ui_state.createNode(.panel);
+    ui_state.tree.get(host).?.style = .{ .width = .fill, .height = .{ .px = 40 } };
+    try ui_state.tree.appendChild(ui_state.root, host);
+    const label = try ui_state.createNode(.label);
+    ui_state.tree.get(label).?.style = .{ .width = .hug, .height = .hug, .font_size = 12 };
+    try ui_state.tree.setText(label, "hidden at birth");
+    try ui_state.tree.appendChild(host, label);
+    try ui_state.setVisible(host, false);
+
+    // Layout never reaches a hidden subtree, and the frame still clears its
+    // dirty flags, so the label goes into the next frame unmeasured.
+    try ui_state.beginFrame(.{ .window_size = .{ .x = 200, .y = 100 } });
+    try ui_state.endFrame();
+    try std.testing.expectEqual(@as(f32, -1), ui_state.tree.getConst(label).?.measured_text_font_size);
+
+    try ui_state.setVisible(host, true);
+    try ui_state.beginFrame(.{ .window_size = .{ .x = 200, .y = 100 } });
+    try ui_state.endFrame();
+    const measured_width = ui_state.tree.getConst(label).?.measured_text.x;
+    try std.testing.expectEqual(@as(f32, 12), ui_state.tree.getConst(label).?.measured_text_font_size);
+    try std.testing.expect(measured_width > 0);
+
+    // Text that changes out of sight is measured again on the way back in.
+    try ui_state.setVisible(host, false);
+    try ui_state.beginFrame(.{ .window_size = .{ .x = 200, .y = 100 } });
+    try ui_state.endFrame();
+    try ui_state.setText(label, "a much longer label than before");
+    try ui_state.setVisible(host, true);
+    try ui_state.beginFrame(.{ .window_size = .{ .x = 200, .y = 100 } });
+    try ui_state.endFrame();
+    try std.testing.expect(ui_state.tree.getConst(label).?.measured_text.x > measured_width);
 }

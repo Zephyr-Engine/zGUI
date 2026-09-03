@@ -468,11 +468,26 @@ test "stepper arrows centre in the gutter they own" {
     var ui = try app.Ui.init(std.testing.allocator);
     defer ui.deinit();
 
-    var field = try NumericField.initF32(std.testing.allocator, &ui, ui.rootNode(), 0, .{});
+    const options = Options{ .width = .{ .px = 120 } };
+    var field = try NumericField.initI32(std.testing.allocator, &ui, ui.rootNode(), 10, options);
     defer field.deinit(&ui);
+    var value: i32 = 10;
+
+    // The arrows are born hidden, so only the frame that reveals them can
+    // measure the glyphs that centring depends on.
+    try ui.beginFrame(.{ .window_size = .{ .x = 200, .y = 50 } });
+    _ = try field.updateI32(&ui, &value, options);
+    try ui.endFrame();
+    try ui.beginFrame(.{
+        .events = &.{.{ .mouse_move = .{ .x = 60, .y = 17 } }},
+        .window_size = .{ .x = 200, .y = 50 },
+    });
+    _ = try field.updateI32(&ui, &value, options);
+    try ui.endFrame();
 
     for ([_]types.NodeId{ field.increment_button, field.decrement_button }) |button_node| {
-        const style = ui.nodeStyle(button_node).?;
+        const node = ui.tree.getConst(button_node).?;
+        const style = node.style;
         try std.testing.expectEqual(
             @import("../core/style.zig").TextAlign.center,
             style.text_align,
@@ -483,5 +498,11 @@ test "stepper arrows centre in the gutter they own" {
             style.padding.top,
             0.01,
         );
+        // Centring silently degrades to the leading edge when the run was
+        // never measured, which is exactly what a hidden-at-birth control
+        // used to hand the paint pass.
+        try std.testing.expectEqual(style.font_size, node.measured_text_font_size);
+        try std.testing.expect(node.measured_text.x > 0);
+        try std.testing.expect(node.measured_text.x < node.bounds.w);
     }
 }

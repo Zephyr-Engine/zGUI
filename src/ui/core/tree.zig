@@ -203,6 +203,25 @@ pub const UiTree = struct {
         }
     }
 
+    /// Marks a whole subtree for re-measurement. Layout skips a hidden subtree
+    /// entirely, yet the frame that hid it still clears its dirty flags, so any
+    /// measurement inside it goes stale with nothing left to record the debt.
+    /// Revealing the subtree is where that debt comes due.
+    pub fn markSubtreeDirty(self: *UiTree, id: types.NodeId) void {
+        const node = self.get(id) orelse return;
+        node.dirty.layout = true;
+        node.dirty.paint = true;
+        node.dirty.text = true;
+        self.queueDirty(id);
+
+        var child = (self.getConst(id) orelse return).first_child;
+        while (child != types.invalid_node) {
+            const next = (self.getConst(child) orelse break).next_sibling;
+            self.markSubtreeDirty(child);
+            child = next;
+        }
+    }
+
     pub fn dirtyCounts(self: *const UiTree) DirtyCounts {
         var result: DirtyCounts = .{};
         if (self.dirty_tracking_lost) {
