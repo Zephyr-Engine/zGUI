@@ -26,6 +26,8 @@ pub const NumericField = struct {
     increment_button: types.NodeId,
     decrement_button: types.NodeId,
     trailing_label_node: types.NodeId,
+    /// Width of the right-hand gutter the stepper and the trailing label share.
+    affordance_width: f32,
     kind: Kind,
     invalid: bool = false,
 
@@ -47,23 +49,31 @@ pub const NumericField = struct {
             .i32, .u32 => try std.fmt.bufPrint(&buf, "{d}", .{value}),
             .f32 => try std.fmt.bufPrint(&buf, "{d}", .{value}),
         };
-        const stepper_height = ui.theme.metrics.control_height;
+        const field_height = ui.theme.metrics.control_height;
         // Holds either the stepper arrows or a trailing label, so it has to
         // stay wide enough for a glyph at whatever size the theme asks for.
         const affordance_width = @max(stepper_width, ui.theme.font.tiny + 10);
-        var text = try text_field.TextField.init(allocator, ui, parent, .{ .text = formatted, .max_bytes = options.max_bytes, .width = options.width, .height = stepper_height });
+        var text = try text_field.TextField.init(allocator, ui, parent, .{ .text = formatted, .max_bytes = options.max_bytes, .width = options.width, .height = field_height });
         errdefer text.deinit(ui);
 
+        const frame = ui.tree.get(text.root_node).?;
+        // The affordance fills the field's right end, but it sits inside the
+        // frame rather than over it: inset by the border on every edge it
+        // touches so the field keeps an unbroken outline and no strip of the
+        // well shows between the two.
+        const border = frame.style.border_width;
+        const affordance_height = @max(0, field_height - border * 2);
         // Keep edited text clear of the controls even while their hover-only
         // surface is hidden, so revealing the stepper never shifts the value.
-        ui.tree.get(text.root_node).?.style.padding.right = affordance_width + 3;
+        frame.style.padding.right = affordance_width + border + 3;
 
         const trailing_label_node = try label.label(ui, text.root_node, options.trailing_label, ui.theme.textStyle(.{
             .width = .{ .px = affordance_width },
-            .height = .{ .px = stepper_height },
-            .padding = .{ .left = 7, .top = ui.centeredTextTop(stepper_height, ui.theme.font.tiny) },
+            .height = .{ .px = affordance_height },
+            .padding = .{ .top = ui.centeredTextTop(affordance_height, ui.theme.font.tiny) },
             .color = options.trailing_label_color,
             .size = ui.theme.font.tiny,
+            .text_align = .center,
         }));
         try ui.setVisible(trailing_label_node, false);
 
@@ -71,15 +81,15 @@ pub const NumericField = struct {
         const stepper = ui.tree.get(stepper_node).?;
         stepper.style = ui.theme.style(.{
             .width = .{ .px = affordance_width },
-            .height = .{ .px = stepper_height },
+            .height = .{ .px = affordance_height },
             .direction = .column,
         });
         stepper.flags.visible = false;
         stepper.flags.clipped = true;
         try ui.tree.appendChild(text.root_node, stepper_node);
 
-        const increment_button = try button.button(ui, stepper_node, "\u{2303}", stepperButtonStyle(ui, true, stepper_height));
-        const decrement_button = try button.button(ui, stepper_node, "\u{2304}", stepperButtonStyle(ui, false, stepper_height));
+        const increment_button = try button.button(ui, stepper_node, "\u{2303}", stepperButtonStyle(ui, true, affordance_height, border));
+        const decrement_button = try button.button(ui, stepper_node, "\u{2304}", stepperButtonStyle(ui, false, affordance_height, border));
 
         return .{
             .text = text,
@@ -87,6 +97,7 @@ pub const NumericField = struct {
             .increment_button = increment_button,
             .decrement_button = decrement_button,
             .trailing_label_node = trailing_label_node,
+            .affordance_width = affordance_width,
             .kind = kind,
         };
     }
@@ -172,10 +183,12 @@ pub const NumericField = struct {
         }
         var style = ui.nodeStyle(self.stepper_node) orelse return error.InvalidNode;
         // The field reserves a right gutter for whichever affordance is showing,
-        // so park both of them at its start. Deriving the offset from the gutter
-        // keeps the label inside the field when the theme scales its type.
-        const next_left = @max(0, root.bounds.w - root.style.padding.right - root.style.padding.left);
-        const next_top = -root.style.padding.top;
+        // so park both of them against its inner edge. Measuring back from the
+        // frame rather than forward from the text's padding keeps the affordance
+        // flush with the border, whatever gap the text is holding.
+        const border = root.style.border_width;
+        const next_left = @max(0, root.bounds.w - root.style.padding.left - self.affordance_width - border);
+        const next_top = border - root.style.padding.top;
         if (style.margin.left != next_left or style.margin.top != next_top) {
             style.margin.left = next_left;
             style.margin.top = next_top;
@@ -183,7 +196,7 @@ pub const NumericField = struct {
         }
 
         var label_style = ui.nodeStyle(self.trailing_label_node) orelse return error.InvalidNode;
-        const next_label_top = -root.style.padding.top;
+        const next_label_top = next_top;
         if (label_style.margin.left != next_left or label_style.margin.top != next_label_top or
             !std.meta.eql(label_style.foreground, ui.theme.color(options.trailing_label_color)))
         {
@@ -237,11 +250,14 @@ pub const NumericField = struct {
     }
 };
 
-fn stepperButtonStyle(ui: *const app.Ui, top: bool, height: f32) @import("../core/style.zig").Style {
+fn stepperButtonStyle(ui: *const app.Ui, top: bool, height: f32, border: f32) @import("../core/style.zig").Style {
     // Each arrow owns half the gutter, so centre the glyph in that half rather
     // than nudging it with a fixed inset: the pair then reads as one column
     // whatever width the theme's type asks the gutter to be.
     const button_height = height / 2;
+    // Nested inside the field's border, so the outer corner curves one border
+    // width tighter than the frame it sits in.
+    const radius = @max(0, ui.theme.radius_tokens.control - border);
     return ui.theme.style(.{
         .width = .fill,
         .height = .{ .px = button_height },
@@ -257,9 +273,9 @@ fn stepperButtonStyle(ui: *const app.Ui, top: bool, height: f32) @import("../cor
         .border_width = 0,
         .border_edges = if (top) .{ .left = 1, .bottom = 1 } else .{ .left = 1 },
         .radius_corners = if (top)
-            .{ .top_right = ui.theme.radius_tokens.control }
+            .{ .top_right = radius }
         else
-            .{ .bottom_right = ui.theme.radius_tokens.control },
+            .{ .bottom_right = radius },
         .font_size = ui.theme.font.tiny,
     });
 }
@@ -505,4 +521,51 @@ test "stepper arrows centre in the gutter they own" {
         try std.testing.expect(node.measured_text.x > 0);
         try std.testing.expect(node.measured_text.x < node.bounds.w);
     }
+}
+
+test "both affordances sit flush inside the field's frame" {
+    var ui = try app.Ui.init(std.testing.allocator);
+    defer ui.deinit();
+
+    const options = Options{ .width = .{ .px = 160 }, .trailing_label = "X" };
+    var field = try NumericField.initI32(std.testing.allocator, &ui, ui.rootNode(), 0, options);
+    defer field.deinit(&ui);
+    var value: i32 = 0;
+
+    // The pointer starts at the origin, which is inside the field, so park it
+    // outside to see the trailing label rather than the stepper.
+    const away = types.Vec2{ .x = 280, .y = 55 };
+    for (0..3) |_| {
+        try ui.beginFrame(.{ .events = &.{.{ .mouse_move = away }}, .window_size = .{ .x = 300, .y = 60 } });
+        _ = try field.updateI32(&ui, &value, options);
+        try ui.endFrame();
+    }
+
+    const frame = ui.bounds(field.text.root_node).?;
+    const border = ui.tree.getConst(field.text.root_node).?.style.border_width;
+    try std.testing.expect(border > 0);
+
+    // Inside the border on every edge it touches: the frame stays unbroken and
+    // no strip of the field's own well shows past the affordance.
+    const unit = ui.bounds(field.trailing_label_node).?;
+    try std.testing.expectEqual(frame.x + frame.w - border, unit.x + unit.w);
+    try std.testing.expectEqual(frame.y + border, unit.y);
+    try std.testing.expectEqual(frame.h - border * 2, unit.h);
+
+    try ui.beginFrame(.{
+        .events = &.{.{ .mouse_move = .{ .x = frame.x + frame.w / 2, .y = frame.y + frame.h / 2 } }},
+        .window_size = .{ .x = 300, .y = 60 },
+    });
+    _ = try field.updateI32(&ui, &value, options);
+    try ui.endFrame();
+
+    const stepper = ui.bounds(field.stepper_node).?;
+    try std.testing.expectEqual(unit.x, stepper.x);
+    try std.testing.expectEqual(frame.x + frame.w - border, stepper.x + stepper.w);
+    try std.testing.expectEqual(frame.y + border, stepper.y);
+    try std.testing.expectEqual(frame.h - border * 2, stepper.h);
+
+    // The text keeps clear of whichever affordance is showing.
+    const text_right = ui.bounds(field.text.text_node).?;
+    try std.testing.expect(text_right.x + text_right.w <= stepper.x);
 }
