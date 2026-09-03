@@ -17,6 +17,9 @@ pub const SelectionList = struct {
             .width = .{ .px = 220 },
             .height = .hug,
             .direction = .column,
+            // Inset the rows so a highlighted one keeps clear of the rounded
+            // border instead of squaring off against it.
+            .padding = types.Edges.all(ui.theme.space.xs),
             .background = .card,
             .border = .stroke,
             .border_width = 1,
@@ -56,15 +59,27 @@ pub const SelectionList = struct {
             const node = self.item_nodes.pop().?;
             ui.destroySubtree(node);
         }
+        const font_size = ui.theme.font.body + 2;
+        // A row is a compact control unless the theme's type outgrows one, and
+        // the label is centred in whatever height that lands on: the old fixed
+        // 2/8 split rode the text against the row's top edge.
+        const item_height = @max(
+            ui.theme.metrics.compact_control_height,
+            ui.textLineHeight(font_size) + ui.theme.space.md,
+        );
         while (self.item_nodes.items.len < labels.len) {
             const item = try primitives.themedButton(ui, self.root_node, "", .{
                 .width = .fill,
-                .height = .{ .px = 28 },
-                .padding = .{ .left = 14, .right = 14, .top = 2, .bottom = 8 },
+                .height = .{ .px = item_height },
+                .padding = .{
+                    .left = ui.theme.space.lg,
+                    .right = ui.theme.space.lg,
+                    .top = ui.centeredTextTop(item_height, font_size),
+                },
                 .variant = .ghost,
                 .border = .transparent,
                 .border_width = 0,
-                .font_size = ui.theme.font.body + 2,
+                .font_size = font_size,
             });
             applyItemStyle(ui, item);
             try self.item_nodes.append(self.allocator, item);
@@ -118,4 +133,29 @@ fn isDescendant(ui: *const app.Ui, candidate: types.NodeId, ancestor: types.Node
         node = if (ui.tree.getConst(node)) |entry| entry.parent else types.invalid_node;
     }
     return false;
+}
+
+test "rows centre their labels and stay clear of the popup border" {
+    var ui = try app.Ui.init(std.testing.allocator);
+    defer ui.deinit();
+
+    var list = try SelectionList.init(std.testing.allocator, &ui, ui.rootNode());
+    defer list.deinit(&ui);
+    try list.setItems(&ui, &.{ "Camera", "Fly Camera Controller" });
+
+    const root_style = ui.nodeStyle(list.root_node).?;
+    try std.testing.expect(root_style.padding.top > 0);
+    try std.testing.expect(root_style.padding.left > 0);
+
+    for (list.item_nodes.items) |item| {
+        const style = ui.nodeStyle(item).?;
+        const height = style.height.px;
+        try std.testing.expect(height >= ui.textLineHeight(style.font_size));
+        try std.testing.expectApproxEqAbs(
+            ui.centeredTextTop(height, style.font_size),
+            style.padding.top,
+            0.01,
+        );
+        try std.testing.expectEqual(style.padding.left, style.padding.right);
+    }
 }

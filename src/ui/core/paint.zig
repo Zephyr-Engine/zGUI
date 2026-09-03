@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const style_mod = @import("style.zig");
+const node_mod = @import("node.zig");
 const tree_mod = @import("tree.zig");
 
 pub const PaintCommand = union(enum) {
@@ -165,7 +166,7 @@ fn buildPaintNode(tree: *const tree_mod.UiTree, root: types.NodeId, list: *Paint
             .source_node = root,
             .text_revision = node.text_revision,
             .pos = .{
-                .x = node.bounds.x + node.style.padding.left,
+                .x = node.bounds.x + textLeft(node),
                 .y = node.bounds.y + node.style.padding.top + node.style.font_size,
             },
             .text = text,
@@ -182,6 +183,23 @@ fn buildPaintNode(tree: *const tree_mod.UiTree, root: types.NodeId, list: *Paint
     }
 
     if (clipped) try list.append(.clip_pop);
+}
+
+/// Leading edge of a text run inside its node. Centring and trailing alignment
+/// need the run's width, which only the layout pass measures, so a node whose
+/// cache does not match the size being painted falls back to the padding box's
+/// leading edge rather than aligning against a stale measurement.
+fn textLeft(node: *const node_mod.Node) f32 {
+    const padding = node.style.padding;
+    if (node.style.text_align == .start) return padding.left;
+    if (node.measured_text_font_size != node.style.font_size) return padding.left;
+    const inner = node.bounds.w - padding.left - padding.right;
+    const slack = @max(0, inner - node.measured_text.x);
+    return padding.left + switch (node.style.text_align) {
+        .start => 0,
+        .center => slack / 2,
+        .end => slack,
+    };
 }
 
 fn commandVisible(bounds: types.Rect, outset: f32, clip: ?types.Rect, stats: *PaintStats) bool {
@@ -272,4 +290,56 @@ test "clipped containers skip offscreen subtrees" {
     const stats = try buildPaintListMeasured(&tree, root, &list);
     try std.testing.expect(stats.culled_subtrees >= 89);
     try std.testing.expect(list.commands.items.len < 20);
+}
+
+test "centred text sits on the middle of its padding box" {
+    const layout_mod = @import("layout.zig");
+
+    var tree = tree_mod.UiTree.init(std.testing.allocator);
+    defer tree.deinit();
+    var list = PaintList.init(std.testing.allocator);
+    defer list.deinit();
+
+    const root = try tree.createNode(.root);
+    tree.get(root).?.style = .{ .width = .fill, .height = .fill };
+    const label = try tree.createNode(.label);
+    tree.get(label).?.style = .{
+        .width = .fill,
+        .height = .{ .px = 20 },
+        .padding = .{ .left = 4, .right = 4 },
+        .font_size = 10,
+        .text_align = .center,
+    };
+    try tree.setText(label, "ab");
+    try tree.appendChild(root, label);
+
+    layout_mod.layoutTree(&tree, root, .{ .x = 100, .y = 100 }, null);
+    _ = try buildPaintListMeasured(&tree, root, &list);
+
+    const node = tree.getConst(label).?;
+    try std.testing.expect(node.measured_text.x > 0);
+    const expected = node.bounds.x + 4 + (node.bounds.w - 8 - node.measured_text.x) / 2;
+    for (list.commands.items) |command| switch (command) {
+        .text => |text| {
+            try std.testing.expectApproxEqAbs(expected, text.pos.x, 0.01);
+            return;
+        },
+        else => {},
+    };
+    return error.MissingTextCommand;
+}
+
+test "text alignment falls back to the leading edge without a measurement" {
+    var tree = tree_mod.UiTree.init(std.testing.allocator);
+    defer tree.deinit();
+
+    const id = try tree.createNode(.label);
+    const node = tree.get(id).?;
+    node.style = .{ .padding = .{ .left = 6 }, .font_size = 10, .text_align = .center };
+    node.bounds = .{ .x = 0, .y = 0, .w = 100, .h = 20 };
+    try std.testing.expectEqual(@as(f32, 6), textLeft(node));
+
+    node.measured_text = .{ .x = 40, .y = 12 };
+    node.measured_text_font_size = 10;
+    try std.testing.expectEqual(@as(f32, 6 + 27), textLeft(node));
 }

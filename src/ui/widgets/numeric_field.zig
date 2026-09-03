@@ -238,10 +238,15 @@ pub const NumericField = struct {
 };
 
 fn stepperButtonStyle(ui: *const app.Ui, top: bool, height: f32) @import("../core/style.zig").Style {
+    // Each arrow owns half the gutter, so centre the glyph in that half rather
+    // than nudging it with a fixed inset: the pair then reads as one column
+    // whatever width the theme's type asks the gutter to be.
+    const button_height = height / 2;
     return ui.theme.style(.{
         .width = .fill,
-        .height = .{ .px = height / 2 },
-        .padding = .{ .left = 7, .top = 1 },
+        .height = .{ .px = button_height },
+        .padding = .{ .top = ui.centeredTextTop(button_height, ui.theme.font.tiny) },
+        .text_align = .center,
         .background = .panel_soft,
         .foreground = .text_dim,
         .hover_background = .accent_soft,
@@ -457,4 +462,26 @@ test "numeric stepper respects configured step and bounds" {
     try std.testing.expectEqual(@as(f32, 0), try steppedValue(0, .{ .min = 0 }, -1));
     try std.testing.expectEqual(std.math.maxInt(i32), toI32(@floatFromInt(std.math.maxInt(i32))));
     try std.testing.expectEqual(std.math.maxInt(u32), toU32(@floatFromInt(std.math.maxInt(u32))));
+}
+
+test "stepper arrows centre in the gutter they own" {
+    var ui = try app.Ui.init(std.testing.allocator);
+    defer ui.deinit();
+
+    var field = try NumericField.initF32(std.testing.allocator, &ui, ui.rootNode(), 0, .{});
+    defer field.deinit(&ui);
+
+    for ([_]types.NodeId{ field.increment_button, field.decrement_button }) |button_node| {
+        const style = ui.nodeStyle(button_node).?;
+        try std.testing.expectEqual(
+            @import("../core/style.zig").TextAlign.center,
+            style.text_align,
+        );
+        try std.testing.expectEqual(@as(f32, 0), style.padding.left);
+        try std.testing.expectApproxEqAbs(
+            ui.centeredTextTop(style.height.px, ui.theme.font.tiny),
+            style.padding.top,
+            0.01,
+        );
+    }
 }

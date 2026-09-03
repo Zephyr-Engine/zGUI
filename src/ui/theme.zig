@@ -152,6 +152,7 @@ pub const StyleOptions = struct {
     radius_px: ?f32 = null,
     radius_corners: ?style_mod.CornerRadii = null,
     font_size: f32 = 16,
+    text_align: style_mod.TextAlign = .start,
 };
 
 pub const TextOptions = struct {
@@ -163,6 +164,7 @@ pub const TextOptions = struct {
     margin: style_mod.Edges = .{},
     color: ColorRole = .text,
     size: f32 = 13,
+    text_align: style_mod.TextAlign = .start,
 };
 
 pub const Theme = struct {
@@ -247,6 +249,7 @@ pub const Theme = struct {
             .border_edges = options.border_edges,
             .radius = options.radius_corners orelse style_mod.CornerRadii.all(options.radius_px orelse self.radius(options.radius)),
             .font_size = options.font_size,
+            .text_align = options.text_align,
         };
     }
 
@@ -260,6 +263,7 @@ pub const Theme = struct {
             .margin = options.margin,
             .foreground = options.color,
             .font_size = options.size,
+            .text_align = options.text_align,
         });
     }
 };

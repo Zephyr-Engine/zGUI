@@ -18,6 +18,13 @@ pub const Overflow = enum {
     scroll,
 };
 
+/// Horizontal placement of a node's text run inside its padding box.
+pub const TextAlign = enum {
+    start,
+    center,
+    end,
+};
+
 pub const CornerRadii = struct {
     top_left: f32 = 0,
     top_right: f32 = 0,
@@ -64,4 +71,5 @@ pub const Style = struct {
     radius: CornerRadii = .{},
 
     font_size: f32 = 16,
+    text_align: TextAlign = .start,
 };
